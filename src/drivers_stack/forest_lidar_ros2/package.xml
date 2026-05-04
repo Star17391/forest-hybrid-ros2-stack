@@ -3,9 +3,20 @@
 <package format="3">
   <name>forest_lidar_ros2</name>
   <version>0.1.0</version>
-  <description>Integração ROS 2 do LiDAR 3D — esqueleto (driver concreto a definir).</description>
+  <description>Integração futura LiDAR 3D — dependências genéricas preparadas (sem driver específico).</description>
   <maintainer email="tese@fe.up.pt">tese</maintainer>
   <license>Apache-2.0</license>
+
   <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Nuvem de pontos, TF e geometria (comum a qualquer driver LiDAR ROS 2) -->
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_sensor_msgs</depend>
+  <depend>pcl_conversions</depend>
+  <depend>pcl_msgs</depend>
+
   <export><build_type>ament_cmake</build_type></export>
 </package>

@@ -3,9 +3,13 @@
 <package format="3">
   <name>forest_robot_supervisor</name>
   <version>0.1.0</version>
-  <description>Arranque, estados de vida e supervisão do stack (análogo ao *initializer* FDPO) — esqueleto.</description>
+  <description>Modo de operação e supervisão leve (publica /robot/operation_mode).</description>
   <maintainer email="tese@fe.up.pt">tese</maintainer>
   <license>Apache-2.0</license>
+
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+
   <export><build_type>ament_cmake</build_type></export>
 </package>

@@ -1,0 +1,10 @@
+# Parâmetros do nó `camera` (camera_ros / libcamera)
+camera:
+  ros__parameters:
+    camera: 0
+    role: "viewfinder"
+    format: "RGB888"
+    width: 640
+    height: 480
+    frame_id: "camera_optical_frame"
+    use_node_time: false

@@ -3,9 +3,14 @@
 <package format="3">
   <name>forest_semantic_segmentation</name>
   <version>0.1.0</version>
-  <description>Segmentação semântica RGB (contexto semântico para fusão com LiDAR) — esqueleto.</description>
+  <description>Segmentação semântica RGB; em modo aerial não processa imagem.</description>
   <maintainer email="tese@fe.up.pt">tese</maintainer>
   <license>Apache-2.0</license>
+
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+
   <export><build_type>ament_cmake</build_type></export>
 </package>
