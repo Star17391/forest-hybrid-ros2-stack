@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Esqueleto: composição completa será adicionada incrementalmente. -->
+  <arg name="use_sim_time" default="false"/>
+  <group if="$(var use_sim_time)">
+    <param name="use_sim_time" value="true"/>
+  </group>
+</launch>

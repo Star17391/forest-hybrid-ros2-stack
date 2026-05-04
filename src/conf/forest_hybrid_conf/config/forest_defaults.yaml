@@ -1,0 +1,4 @@
+# Parâmetros globais de exemplo — ajustar quando os nós existirem.
+forest_hybrid:
+  ros__parameters:
+    use_sim_time: false
