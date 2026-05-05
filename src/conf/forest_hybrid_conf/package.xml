@@ -12,9 +12,11 @@
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>camera_ros</exec_depend>
   <exec_depend>forest_camera_ros2</exec_depend>
+  <exec_depend>forest_hybrid_msgs</exec_depend>
   <exec_depend>forest_robot_supervisor</exec_depend>
   <exec_depend>forest_semantic_segmentation</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>usb_cam</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

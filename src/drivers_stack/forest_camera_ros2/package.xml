@@ -3,13 +3,15 @@
 <package format="3">
   <name>forest_camera_ros2</name>
   <version>0.1.0</version>
-  <description>Lançamentos e configuração para camera_ros (libcamera / Pi Cam).</description>
+  <description>Lançamentos e configuração para câmara USB (usb_cam) e CSI (camera_ros).</description>
   <maintainer email="tese@fe.up.pt">tese</maintainer>
   <license>Apache-2.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>camera_ros</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>usb_cam</exec_depend>
 
   <export><build_type>ament_cmake</build_type></export>
 </package>

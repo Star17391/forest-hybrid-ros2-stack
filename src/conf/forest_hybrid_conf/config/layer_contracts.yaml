@@ -1,0 +1,76 @@
+layer_contracts:
+  camera_driver_layer:
+    description: "Aquisição de imagem RGB via USB (ou CSI no futuro)."
+    outputs:
+      - topic: /camera/image_raw
+        type: sensor_msgs/msg/Image
+      - topic: /camera/camera_info
+        type: sensor_msgs/msg/CameraInfo
+
+  segmentation_layer:
+    description: "Segmentação semântica 2D por pixel."
+    inputs:
+      - topic: /camera/image_raw
+        type: sensor_msgs/msg/Image
+      - topic: /system/locomotion_mode
+        type: forest_hybrid_msgs/msg/OperationMode
+    outputs:
+      - topic: /perception/semantic_mask
+        type: sensor_msgs/msg/Image
+        notes: "mono8; ID de classe por pixel."
+
+  state_estimation_layer:
+    description: "Fase futura (FAST-LIO2)."
+    inputs:
+      - topic: /sensors/imu/data
+        type: sensor_msgs/msg/Imu
+      - topic: /sensors/lidar/points
+        type: sensor_msgs/msg/PointCloud2
+    outputs:
+      - topic: /state/pose_fused
+        type: geometry_msgs/msg/PoseStamped
+      - topic: /state/odometry
+        type: nav_msgs/msg/Odometry
+
+  fusion_mapping_layer:
+    description: "Fase futura; fusão semântica + mapeamento 2.5D/3D."
+    inputs:
+      - topic: /sensors/lidar/points
+        type: sensor_msgs/msg/PointCloud2
+      - topic: /perception/semantic_mask
+        type: sensor_msgs/msg/Image
+      - topic: /state/pose_fused
+        type: geometry_msgs/msg/PoseStamped
+    outputs:
+      - topic: /mapping/traversability_map
+        type: grid_map_msgs/msg/GridMap
+      - topic: /mapping/volumetric_map
+        type: voxblox_msgs/msg/Layer
+
+  planning_decision_layer:
+    description: "Fase futura; planeamento global/local e decisão de modo."
+    inputs:
+      - topic: /mapping/traversability_map
+        type: grid_map_msgs/msg/GridMap
+      - topic: /mapping/volumetric_map
+        type: voxblox_msgs/msg/Layer
+      - topic: /state/pose_fused
+        type: geometry_msgs/msg/PoseStamped
+    outputs:
+      - topic: /planning/local_trajectory
+        type: nav_msgs/msg/Path
+      - topic: /system/locomotion_mode
+        type: forest_hybrid_msgs/msg/OperationMode
+
+  control_layer:
+    description: "Fase futura; NMPC para atuação."
+    inputs:
+      - topic: /planning/local_trajectory
+        type: nav_msgs/msg/Path
+      - topic: /state/pose_fused
+        type: geometry_msgs/msg/PoseStamped
+      - topic: /system/locomotion_mode
+        type: forest_hybrid_msgs/msg/OperationMode
+    outputs:
+      - topic: /actuators/motor_cmd
+        type: std_msgs/msg/Float32MultiArray

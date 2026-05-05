@@ -2,8 +2,8 @@
 #include <memory>
 #include <string>
 
+#include "forest_hybrid_msgs/msg/operation_mode.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "std_msgs/msg/string.hpp"
 
 using namespace std::chrono_literals;
 
@@ -16,8 +16,8 @@ public:
   OperationModeNode() : Node("operation_mode_node")
   {
     declare_parameter<std::string>("operation_mode", "ground");
-    pub_ = create_publisher<std_msgs::msg::String>(
-      "/robot/operation_mode", rclcpp::QoS(1).transient_local());
+    pub_ = create_publisher<forest_hybrid_msgs::msg::OperationMode>(
+      "/system/locomotion_mode", rclcpp::QoS(1).transient_local());
     timer_ = create_wall_timer(500ms, std::bind(&OperationModeNode::on_timer, this));
     on_timer();
   }
@@ -25,19 +25,26 @@ public:
 private:
   void on_timer()
   {
-    std_msgs::msg::String msg;
-    msg.data = get_parameter("operation_mode").as_string();
-    if (msg.data != "ground" && msg.data != "aerial") {
+    forest_hybrid_msgs::msg::OperationMode msg;
+    const auto configured_mode = get_parameter("operation_mode").as_string();
+    if (configured_mode == "ground") {
+      msg.mode = forest_hybrid_msgs::msg::OperationMode::MODE_GROUND;
+      msg.mode_name = "ground";
+    } else if (configured_mode == "aerial") {
+      msg.mode = forest_hybrid_msgs::msg::OperationMode::MODE_AERIAL;
+      msg.mode_name = "aerial";
+    } else {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 5000,
         "operation_mode must be 'ground' or 'aerial', got '%s' — clamping to ground",
-        msg.data.c_str());
-      msg.data = "ground";
+        configured_mode.c_str());
+      msg.mode = forest_hybrid_msgs::msg::OperationMode::MODE_GROUND;
+      msg.mode_name = "ground";
     }
     pub_->publish(msg);
   }
 
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_;
+  rclcpp::Publisher<forest_hybrid_msgs::msg::OperationMode>::SharedPtr pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 
