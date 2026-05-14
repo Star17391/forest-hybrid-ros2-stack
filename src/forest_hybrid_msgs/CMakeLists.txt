@@ -5,6 +5,9 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 set(msg_files
+  "msg/MissionAck.msg"
+  "msg/MissionCommand.msg"
+  "msg/MissionStatus.msg"
   "msg/OperationMode.msg"
   "msg/SemanticClass.msg"
 )

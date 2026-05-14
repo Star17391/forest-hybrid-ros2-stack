@@ -1,0 +1,65 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Enabled: true
+      Name: Grid
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Name: TF
+      Show Axes: true
+      Show Names: true
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 25; 255; 0
+      Enabled: true
+      Name: Local trajectory
+      Topic:
+        Value: /planning/local_trajectory
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 255; 170; 0
+      Enabled: true
+      Name: Sparse path
+      Topic:
+        Value: /planning/debug/sparse_path
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Nav debug markers
+      Topic:
+        Value: /planning/debug/markers
+    - Alpha: 1
+      Axes Length: 1
+      Class: rviz_default_plugins/Pose
+      Color: 0; 255; 0
+      Enabled: true
+      Name: Mission goal
+      Topic:
+        Value: /planning/mission_goal
+    - Alpha: 1
+      Axes Length: 1
+      Class: rviz_default_plugins/Pose
+      Color: 0; 200; 255
+      Enabled: true
+      Name: Pose fused
+      Topic:
+        Value: /state/pose_fused
+  Enabled: true
+  Global Options:
+    Fixed Frame: map
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Distance: 25
+      Name: Current View
+      Pitch: 0.5
+      Yaw: 0.8

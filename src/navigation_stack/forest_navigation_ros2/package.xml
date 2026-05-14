@@ -3,9 +3,14 @@
 <package format="3">
   <name>forest_navigation_ros2</name>
   <version>0.1.0</version>
-  <description>Navegação (Nav2, controladores, *costmaps*) — esqueleto.</description>
+  <description>Navegação MVP: global planner, trajectory sampler, Pure Pursuit, métricas e debug RViz.</description>
   <maintainer email="tese@fe.up.pt">tese</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>visualization_msgs</depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>
