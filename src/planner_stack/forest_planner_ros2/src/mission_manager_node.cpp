@@ -9,6 +9,7 @@
 #include "forest_hybrid_msgs/msg/mission_command.hpp"
 #include "forest_hybrid_msgs/msg/mission_status.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
+#include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32.hpp"
@@ -69,10 +70,10 @@ public:
   {
     declare_parameter<int>("max_replans", 3);
     declare_parameter<double>("goal_tolerance_m", 0.5);
-    declare_parameter<double>("goal_tolerance_heading_deg", 12.0);
+    declare_parameter<double>("goal_tolerance_heading_deg", 25.0);
     declare_parameter<bool>("allow_auto_aerial_on_block", false);
     declare_parameter<std::string>("pose_topic", "/state/pose_fused");
-    declare_parameter<bool>("allow_goal_reached_topic_shortcut", false);
+    declare_parameter<bool>("allow_goal_reached_topic_shortcut", true);
 
     max_replans_ = std::max(1, static_cast<int>(get_parameter("max_replans").as_int()));
     goal_tolerance_m_ = std::max(0.01, get_parameter("goal_tolerance_m").as_double());
@@ -105,6 +106,9 @@ public:
     status_pub_ = create_publisher<forest_hybrid_msgs::msg::MissionStatus>("/mission/status", rclcpp::QoS(10));
     goal_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
       "/planning/mission_goal",
+      rclcpp::QoS(1).transient_local().reliable());
+    route_pub_ = create_publisher<nav_msgs::msg::Path>(
+      "/planning/mission_route",
       rclcpp::QoS(1).transient_local().reliable());
 
     tick_timer_ = create_wall_timer(
@@ -346,6 +350,10 @@ private:
         "HOLD active (mode unchanged; controller decides low-level behavior)");
       return;
     }
+    if (cmd.command_type == C::CMD_PATROL_WAYPOINTS) {
+      publish_patrol_route(cmd);
+      return;
+    }
 
     double mx = 0.0;
     double my = 0.0;
@@ -391,6 +399,55 @@ private:
     active_map_goal_ = goal;
     RCLCPP_INFO(get_logger(), "Published /planning/mission_goal once (key=%s)", key.c_str());
     publish_status(forest_hybrid_msgs::msg::MissionStatus::STATE_EXECUTING, detail);
+  }
+
+  void publish_patrol_route(const forest_hybrid_msgs::msg::MissionCommand & cmd)
+  {
+    const std::string key = cmd.command_id + ":route";
+    if (key == last_published_goal_key_ && !force_goal_republish_) {
+      return;
+    }
+    force_goal_republish_ = false;
+
+    nav_msgs::msg::Path route;
+    route.header.stamp = now();
+    route.header.frame_id = "map";
+
+    for (size_t i = 0; i < cmd.waypoint_x.size(); ++i) {
+      geometry_msgs::msg::PoseStamped wp;
+      wp.header = route.header;
+      wp.pose.position.x = cmd.waypoint_x[i];
+      wp.pose.position.y = cmd.waypoint_y[i];
+      wp.pose.position.z = cmd.waypoint_z[i];
+
+      double yaw_des = 0.0;
+      if (!cmd.waypoint_yaw.empty() && cmd.waypoint_yaw.size() == cmd.waypoint_x.size()) {
+        yaw_des = cmd.waypoint_yaw[i];
+      } else if (i + 1 < cmd.waypoint_x.size()) {
+        const double dx = cmd.waypoint_x[i + 1] - cmd.waypoint_x[i];
+        const double dy = cmd.waypoint_y[i + 1] - cmd.waypoint_y[i];
+        yaw_des = std::atan2(dy, dx);
+      } else if (i > 0) {
+        const double dx = cmd.waypoint_x[i] - cmd.waypoint_x[i - 1];
+        const double dy = cmd.waypoint_y[i] - cmd.waypoint_y[i - 1];
+        yaw_des = std::atan2(dy, dx);
+      } else if (last_pose_.has_value()) {
+        yaw_des = desired_heading_rad(wp.pose.position.x, wp.pose.position.y, last_pose_->pose);
+      }
+      quaternion_from_yaw(yaw_des, &wp.pose.orientation);
+      route.poses.push_back(wp);
+    }
+
+    route_pub_->publish(route);
+    last_published_goal_key_ = key;
+    active_map_goal_ = route.poses.back();
+
+    RCLCPP_INFO(
+      get_logger(), "Published /planning/mission_route (%zu waypoints, key=%s)",
+      route.poses.size(), key.c_str());
+    publish_status(
+      forest_hybrid_msgs::msg::MissionStatus::STATE_EXECUTING,
+      "PATROL route with " + std::to_string(route.poses.size()) + " waypoints");
   }
 
   void complete_active(const std::string & detail)
@@ -517,13 +574,7 @@ private:
     }
     using C = forest_hybrid_msgs::msg::MissionCommand;
     if (active_mission_->command.command_type == C::CMD_PATROL_WAYPOINTS) {
-      active_mission_->waypoint_index++;
-      last_published_goal_key_.clear();
-      if (active_mission_->waypoint_index >= active_mission_->command.waypoint_x.size()) {
-        complete_active("PATROL completed all waypoints");
-      } else {
-        execute_active_command();
-      }
+      complete_active(detail);
       return;
     }
     complete_active(detail);
@@ -543,12 +594,10 @@ private:
     }
     const double gx = active_map_goal_->pose.position.x;
     const double gy = active_map_goal_->pose.position.y;
-    const double gz = active_map_goal_->pose.position.z;
     const double rx = pose.pose.position.x;
     const double ry = pose.pose.position.y;
-    const double rz = pose.pose.position.z;
-    const double dist = std::sqrt(
-      (gx - rx) * (gx - rx) + (gy - ry) * (gy - ry) + (gz - rz) * (gz - rz));
+    // Planar arrival: ignore Z (terrain height comes from physics, not mission panel).
+    const double dist = std::hypot(gx - rx, gy - ry);
     if (dist > goal_tolerance_m_) {
       return false;
     }
@@ -590,7 +639,7 @@ private:
     }
     if (check_pose_arrival(*msg)) {
       advance_after_goal_reached(
-        "goal reached (position within " + std::to_string(goal_tolerance_m_) +
+        "goal reached (planar XY within " + std::to_string(goal_tolerance_m_) +
         " m and heading within tolerance)");
     }
   }
@@ -692,6 +741,7 @@ private:
 
   rclcpp::Publisher<forest_hybrid_msgs::msg::MissionStatus>::SharedPtr status_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr route_pub_;
   rclcpp::TimerBase::SharedPtr tick_timer_;
 };
 

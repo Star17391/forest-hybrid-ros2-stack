@@ -1,0 +1,114 @@
+# ros_gz_bridge: MARBLE_HD2 + LiDAR 3D (sensor front_laser, frame laser — igual ao 2D).
+# 2D /scan bridge omitted — use /sensors/lidar/points + lidar_scan_classify (pointcloud mode).
+
+- ros_topic_name: /clock
+  gz_topic_name: /world/unified_world/clock
+  ros_type_name: rosgraph_msgs/msg/Clock
+  gz_type_name: gz.msgs.Clock
+  direction: GZ_TO_ROS
+  lazy: false
+
+- ros_topic_name: /forest_gen/gz/world_tf
+  gz_topic_name: /world/unified_world/dynamic_pose/info
+  ros_type_name: tf2_msgs/msg/TFMessage
+  gz_type_name: gz.msgs.Pose_V
+  direction: GZ_TO_ROS
+  lazy: false
+
+- ros_topic_name: /forest_gen/gz/world_tf_full
+  gz_topic_name: /world/unified_world/pose/info
+  ros_type_name: tf2_msgs/msg/TFMessage
+  gz_type_name: gz.msgs.Pose_V
+  direction: GZ_TO_ROS
+  lazy: true
+
+- ros_topic_name: /forest_gen/cmd_vel
+  gz_topic_name: /model/marble_hd2/cmd_vel
+  ros_type_name: geometry_msgs/msg/Twist
+  gz_type_name: gz.msgs.Twist
+  direction: ROS_TO_GZ
+  lazy: false
+
+- ros_topic_name: /model/marble_hd2/link/left_track/track_cmd_vel
+  gz_topic_name: /model/marble_hd2/link/left_track/track_cmd_vel
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: BIDIRECTIONAL
+  lazy: false
+
+- ros_topic_name: /model/marble_hd2/link/right_track/track_cmd_vel
+  gz_topic_name: /model/marble_hd2/link/right_track/track_cmd_vel
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: BIDIRECTIONAL
+  lazy: false
+
+- ros_topic_name: /forest_gen/gz/left_track_odometry_raw
+  gz_topic_name: /model/marble_hd2/link/left_track/odometry
+  ros_type_name: nav_msgs/msg/Odometry
+  gz_type_name: gz.msgs.Odometry
+  direction: GZ_TO_ROS
+  lazy: false
+  frame_id: odom
+
+- ros_topic_name: /forest_gen/gz/right_track_odometry_raw
+  gz_topic_name: /model/marble_hd2/link/right_track/odometry
+  ros_type_name: nav_msgs/msg/Odometry
+  gz_type_name: gz.msgs.Odometry
+  direction: GZ_TO_ROS
+  lazy: false
+  frame_id: odom
+
+- ros_topic_name: /camera/image_raw
+  gz_topic_name: /world/unified_world/model/marble_hd2/link/base_link/sensor/camera_front/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  lazy: true
+  qos_profile: SENSOR_DATA
+  frame_id: marble_hd2/camera_front_optical
+
+- ros_topic_name: /camera/camera_info
+  gz_topic_name: /world/unified_world/model/marble_hd2/link/base_link/sensor/camera_front/camera_info
+  ros_type_name: sensor_msgs/msg/CameraInfo
+  gz_type_name: gz.msgs.CameraInfo
+  direction: GZ_TO_ROS
+  lazy: true
+  qos_profile: SENSOR_DATA
+  frame_id: marble_hd2/camera_front_optical
+
+- ros_topic_name: /forest_gen/camera_down/image_raw
+  gz_topic_name: /world/unified_world/model/marble_hd2/link/base_link/sensor/camera_down/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  lazy: true
+  qos_profile: SENSOR_DATA
+  frame_id: marble_hd2/camera_down_optical
+
+- ros_topic_name: /forest_gen/camera_front/depth
+  gz_topic_name: /world/unified_world/model/marble_hd2/link/base_link/sensor/camera_front/depth_image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  lazy: true
+  qos_profile: SENSOR_DATA
+  frame_id: marble_hd2/camera_front_depth
+
+- ros_topic_name: /sensors/lidar/points
+  gz_topic_name: /world/unified_world/model/marble_hd2/link/base_link/sensor/front_laser/scan/points
+  ros_type_name: sensor_msgs/msg/PointCloud2
+  gz_type_name: gz.msgs.PointCloudPacked
+  direction: GZ_TO_ROS
+  lazy: false
+  qos_profile: SENSOR_DATA
+  frame_id: laser
+
+- ros_topic_name: /sensors/imu/data_raw
+  gz_topic_name: /world/unified_world/model/marble_hd2/link/base_link/sensor/imu_sensor/imu
+  ros_type_name: sensor_msgs/msg/Imu
+  gz_type_name: gz.msgs.IMU
+  direction: GZ_TO_ROS
+  lazy: false
+  qos_profile: SENSOR_DATA
+  frame_id: marble_hd2/base_link

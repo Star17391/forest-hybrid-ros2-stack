@@ -3,7 +3,7 @@
 <package format="3">
   <name>forest_robot_supervisor</name>
   <version>0.1.0</version>
-  <description>Modo de operação e supervisão leve (publica /robot/operation_mode).</description>
+  <description>Modo de operação e supervisão leve (publica /system/locomotion_mode).</description>
   <maintainer email="tese@fe.up.pt">tese</maintainer>
   <license>Apache-2.0</license>
 
