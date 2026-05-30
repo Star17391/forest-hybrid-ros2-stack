@@ -1,0 +1,75 @@
+# Forest hybrid stack — structural CI + optional live sim (self-hosted / GPU).
+name: forest-ci
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ROS 2 Jazzy
+        uses: ros-tooling/setup-ros2@v0.7
+        with:
+          required-ros-distributions: jazzy
+
+      - name: System deps
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-yaml
+
+      - name: Build workspace
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          cd "${GITHUB_WORKSPACE}"
+          rosdep update || true
+          rosdep install --from-paths src --ignore-src -r -y || true
+          colcon build --symlink-install
+          source install/setup.bash
+
+      - name: Forest phases 1–6 (structural)
+        shell: bash
+        run: |
+          export HYBRID_WS="${GITHUB_WORKSPACE}"
+          export PATH="${HYBRID_WS}/tools/forest/bin:${PATH}"
+          bash tools/forest/tests/phase1_validate.sh
+          bash tools/forest/tests/phase2_validate.sh
+          bash tools/forest/tests/phase3_validate.sh
+          bash tools/forest/tests/phase4_validate.sh
+          bash tools/forest/tests/phase5_validate.sh
+          bash tools/forest/tests/phase6_validate.sh
+
+  # Live sim needs Gazebo + display; enable on self-hosted runner with FOREST_CI_LIVE=1.
+  sim-smoke:
+    runs-on: ubuntu-24.04
+    needs: validate
+    if: vars.FOREST_CI_LIVE == '1'
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ros-tooling/setup-ros2@v0.7
+        with:
+          required-ros-distributions: jazzy
+      - name: Build + headless patrol (experimental)
+        shell: bash
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-yaml gz-harmonic || true
+          source /opt/ros/jazzy/setup.bash
+          cd "${GITHUB_WORKSPACE}"
+          colcon build --symlink-install
+          source install/setup.bash
+          export PATH="${GITHUB_WORKSPACE}/tools/forest/bin:${PATH}"
+          export HYBRID_WS="${GITHUB_WORKSPACE}"
+          export FORESTGEN_PATH="${FORESTGEN_PATH:-$HOME/Projetos/Gazebo/ForestGen}"
+          forest up sim-mvp-nav --headless --timeout 180 -d
+          sleep 15
+          forest test goto --assert --timeout 120 || true
+          forest down --force

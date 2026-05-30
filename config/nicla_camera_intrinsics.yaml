@@ -1,0 +1,30 @@
+# Nicla Vision GC2145 @ 320x240 (ADVR calibrated values).
+# Used as reference for sim parity and offline calibration checks.
+# Source: nicla_vision_ros2 NiclaRosPublisher (RGB565 / JPEG path).
+
+image_width: 320
+image_height: 240
+distortion_model: plumb_bob
+
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [416.650528, 0.0, 166.124514, 0.0, 419.404643, 104.410543, 0.0, 0.0, 1.0]
+
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.176808, -0.590488, -0.008412, 0.015473, 0.0]
+
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [421.373566, 0.0, 168.731782, 0.0, 0.0, 426.438812, 102.665989, 0.0, 0.0, 0.0, 1.0, 0.0]
+
+# Gazebo pinhole from horizontal_fov=0.69813 rad → fx≈440 (no distortion in sim).
+# Real robot publishes full K/D on /camera/camera_info via nicla_receiver.
