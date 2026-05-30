@@ -1,0 +1,16 @@
+# Extrínsecos LiDAR 2D (sim + hardware).
+# +pitch (rad) em base_link: rotação +Y inclina o feixe para baixo e para a frente (+X).
+# Referência: Palacín et al. 2020 — 25° tilt-down push-broom.
+static_sensor_tf_node:
+  ros__parameters:
+    parent_frame: "marble_hd2/base_link"
+    child_frame: "laser"
+    x: 0.40
+    y: 0.0
+    z: 0.36
+    roll: 0.0
+    pitch: 0.436332313
+    yaw: 0.0
+    republish_period_sec: 5.0
+
+# Preprocess + wheel odom: see forest_lidar_preprocess.yaml (installed alongside).

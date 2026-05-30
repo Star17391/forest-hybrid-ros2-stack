@@ -1,0 +1,11 @@
+# Placeholder intrinsics for GC2145 @ 320x240 (replace after checkerboard calibration).
+nicla_serial_bridge:
+  ros__parameters:
+    camera_info_topic: "/camera/camera_info"
+    publish_camera_info: true
+    camera_fx: 280.0
+    camera_fy: 280.0
+    camera_cx: 160.0
+    camera_cy: 120.0
+    camera_distortion_model: "plumb_bob"
+    camera_distortion: [0.0, 0.0, 0.0, 0.0, 0.0]

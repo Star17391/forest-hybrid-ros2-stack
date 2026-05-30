@@ -1,0 +1,11 @@
+# Wi-Fi transport: Pi connects to Nicla TCP server (see firmware wifi_secrets.h).
+nicla_serial_bridge:
+  ros__parameters:
+    transport: wifi
+    # Device JPEG needs ~230 KiB extra RAM (often fails); RGB565 is correct but ~1 Hz on Wi-Fi.
+    image_encoding: rgb565
+    wifi_host: "192.168.1.100"
+    wifi_port: 9876
+    # RGB565 fallback (~153 KB/frame) needs lower rate; raise to 5.0 when STATUS has enc=rgb888
+    image_rate_hz: 1.0
+    imu_rate_hz: 50.0

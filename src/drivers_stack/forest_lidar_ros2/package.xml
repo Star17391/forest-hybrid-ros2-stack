@@ -3,20 +3,23 @@
 <package format="3">
   <name>forest_lidar_ros2</name>
   <version>0.1.0</version>
-  <description>Integração futura LiDAR 3D — dependências genéricas preparadas (sem driver específico).</description>
+  <description>2D YDLidar X4 test driver (fdpo-compatible settings) for forest-hybrid-ros2-stack.</description>
   <maintainer email="tese@fe.up.pt">tese</maintainer>
   <license>Apache-2.0</license>
 
-  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_python</buildtool_depend>
 
-  <!-- Nuvem de pontos, TF e geometria (comum a qualquer driver LiDAR ROS 2) -->
+  <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
-  <depend>geometry_msgs</depend>
-  <depend>tf2</depend>
+  <depend>std_msgs</depend>
   <depend>tf2_ros</depend>
-  <depend>tf2_sensor_msgs</depend>
-  <depend>pcl_conversions</depend>
-  <depend>pcl_msgs</depend>
+  <depend>geometry_msgs</depend>
 
-  <export><build_type>ament_cmake</build_type></export>
+  <exec_depend>forest_sensors_cpp</exec_depend>
+  <exec_depend>ydlidar_ros2_driver</exec_depend>
+  <exec_depend>python3-serial</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
 </package>

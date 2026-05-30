@@ -1,0 +1,12 @@
+fdpo_ydlidar_x4:
+  ros__parameters:
+    port: /dev/ttyUSB0
+    baudrate: 128000
+    frame_id: laser
+    scan_topic: /scan
+    dist_min: 0.12
+    dist_max: 10.0
+    start_settle_ms: 300
+    after_stop_ms: 100
+    start_attempts: 5
+    between_start_ms: 250

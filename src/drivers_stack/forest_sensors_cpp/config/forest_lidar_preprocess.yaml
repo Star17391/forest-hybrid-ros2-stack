@@ -1,0 +1,45 @@
+# Shared LiDAR pipeline (Camada 0). Loaded by sim/hardware launch together with extrinsics.
+laserscan_preprocess_node:
+  ros__parameters:
+    scan_in_topic: "/scan"
+    scan_out_topic: "/sensors/lidar/scan"
+    imu_topic: "/sensors/imu/data"
+    min_range_m: 0.12
+    max_range_m: 10.0
+    enable_imu_leveling: true
+    imu_timeout_sec: 0.35
+    # Must match static_sensor_tf_node / forest_lidar_extrinsics.yaml
+    laser_x: 0.40
+    laser_y: 0.0
+    laser_z: 0.36
+    laser_roll: 0.0
+    laser_pitch: 0.436332313
+    laser_yaw: 0.0
+    enable_motion_compensation: false
+    motion_comp_speed_threshold_mps: 0.8
+
+laserscan_to_pointcloud2_node:
+  ros__parameters:
+    scan_topic: "/sensors/lidar/scan"
+    cloud_topic: "/sensors/lidar/points"
+    min_range_m: 0.12
+    max_range_m: 10.0
+
+imu_sanitize_node:
+  ros__parameters:
+    imu_in_topic: "/sensors/imu/data_raw"
+    imu_out_topic: "/sensors/imu/data"
+
+tracked_wheel_odometry_node:
+  ros__parameters:
+    left_odom_topic: "/forest_gen/gz/left_track_odometry"
+    right_odom_topic: "/forest_gen/gz/right_track_odometry"
+    left_cmd_topic: "/model/marble_hd2/link/left_track/track_cmd_vel"
+    right_cmd_topic: "/model/marble_hd2/link/right_track/track_cmd_vel"
+    use_track_cmd_vel: true
+    output_topic: "/sensors/wheel_odometry"
+    odom_frame: "odom"
+    base_frame: "marble_hd2/base_link"
+    track_separation_m: 0.44
+    publish_rate_hz: 30.0
+    velocity_scale: 1.0

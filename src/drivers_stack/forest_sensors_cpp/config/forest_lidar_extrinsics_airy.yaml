@@ -1,0 +1,12 @@
+# Extrínsecos LiDAR 3D (sim): mesmo sítio que 2D (x,y,z); pitch = metade (12.5°). Frame laser.
+static_sensor_tf_node:
+  ros__parameters:
+    parent_frame: "marble_hd2/base_link"
+    child_frame: "laser"
+    x: 0.40
+    y: 0.0
+    z: 0.36
+    roll: 0.0
+    pitch: 0.218166156
+    yaw: 0.0
+    republish_period_sec: 5.0

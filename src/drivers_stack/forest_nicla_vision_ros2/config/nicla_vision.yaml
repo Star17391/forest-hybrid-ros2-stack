@@ -1,0 +1,20 @@
+nicla_serial_bridge:
+  ros__parameters:
+    transport: serial
+    image_encoding: jpeg
+    serial_port: ""
+    baud_rate: 921600
+    wifi_host: ""
+    wifi_port: 9876
+    frame_id: "nicla_camera_optical_frame"
+    imu_frame_id: "nicla_imu_link"
+    image_rate_hz: 3.0
+    imu_rate_hz: 25.0
+    image_topic: "/camera/image_raw"
+    imu_topic: "/sensors/imu/data"
+    publish_imu: true
+    serial_timeout_s: 5.0
+    reconnect_backoff_max_s: 10.0
+    health_topic: "/sensors/nicla_serial/connected"
+    imu_accel_signs: [1.0, 1.0, 1.0]
+    imu_gyro_signs: [1.0, 1.0, 1.0]

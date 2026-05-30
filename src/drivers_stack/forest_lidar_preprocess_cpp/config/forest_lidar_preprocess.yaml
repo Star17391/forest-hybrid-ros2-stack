@@ -1,0 +1,26 @@
+# Fase 1 — Palacín v1: linha de solo em (x,z) + labels ground/hole/obstacle.
+# Ver docs/FOREST_SLAM_BIBLIOGRAPHY.md e docs/reports/PHASE1_VERIFICATION.md
+lidar_scan_classify_node:
+  ros__parameters:
+    scan_topic: "/sensors/lidar/scan"
+    classification_frame: "marble_hd2/base_link"
+    classify_mode: "palacin_v1"   # palacin_v1 | min_z (legacy)
+    labeled_cloud_topic: "/perception/lidar/points_labeled"
+    scan_ground_topic: "/perception/lidar/scan_ground"
+    scan_other_topic: "/perception/lidar/scan_other"
+    scan_hazard_topic: "/perception/lidar/scan_hazard"
+    min_range_m: 0.12
+    max_range_m: 10.0
+    forward_min_x_m: 0.15
+    # Palacín ±50 mm band; hole/obstacle outside band
+    ground_height_band_m: 0.05
+    hole_depth_m: 0.05
+    obstacle_height_m: 0.05
+    ground_z_offset_m: 0.0
+    ransac_inlier_thresh_m: 0.06
+    ransac_max_iterations: 80
+    ransac_min_inliers: 12
+    ransac_min_inlier_ratio: 0.25
+    tf_timeout_sec: 0.05
+    fallback_laser_pitch_rad: 0.436332313
+    fallback_laser_height_m: 0.36

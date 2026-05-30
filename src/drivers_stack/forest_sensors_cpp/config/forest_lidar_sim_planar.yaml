@@ -1,0 +1,22 @@
+# MARBLE_HD2 planar_laser (gpu_ray) — pose from Fuel model.sdf, horizontal 2D scan.
+# Used when gz_lidar_sensor:=planar_laser (sim-slam-nav default). Tilted front_laser uses forest_lidar_extrinsics.yaml.
+static_sensor_tf_node:
+  ros__parameters:
+    parent_frame: "marble_hd2/base_link"
+    child_frame: "laser"
+    x: 0.403
+    y: 0.0
+    z: 0.127
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+    republish_period_sec: 5.0
+
+laserscan_preprocess_node:
+  ros__parameters:
+    laser_x: 0.403
+    laser_y: 0.0
+    laser_z: 0.127
+    laser_roll: 0.0
+    laser_pitch: 0.0
+    laser_yaw: 0.0

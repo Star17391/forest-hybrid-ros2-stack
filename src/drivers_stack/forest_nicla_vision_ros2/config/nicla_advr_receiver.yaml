@@ -1,0 +1,20 @@
+# Auto-generated from config/forest_nicla_advr_config.h — do not edit by hand.
+# nicla_receiver publish loop rate in upstream: 500 Hz
+nicla_receiver:
+  ros__parameters:
+    nicla_name: "nicla"
+    receiver_ip: "192.168.1.118"
+    receiver_port: "8002"
+    connection_type: "tcp"
+    enable_range: false
+    enable_camera_raw: true
+    enable_camera_compressed: false
+    camera_receive_compressed: true
+    camera_pixel_format: "rgb565"
+    camera_width: 320
+    camera_height: 240
+    camera_img_rotate_code: 0
+    enable_audio: false
+    enable_audio_stamped: false
+    enable_audio_recognition_vosk: false
+    enable_imu: true
