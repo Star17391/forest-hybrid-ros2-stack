@@ -1,0 +1,25 @@
+api_version: forest.dev/v1
+name: sim-teleop
+description: Gazebo + sensores — mundo configurável; usar forest teleop com stack a correr
+
+lifecycle:
+  pre_start: cleanup
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_sim_bridge
+    launch: sim_gazebo.launch.py
+    args:
+      # Altera para qualquer .sdf em FORESTGEN_PATH/worlds/ (ex. forest_rugged_trees_rocks.sdf)
+      world: forest_gentle_trees_rocks.sdf
+      use_rviz: true
+      use_pose_bridge: true
+      use_sensor_tf_static: true
+      use_odom_relay: false
+
+ui:
+  launch_hint: "forest up sim-teleop -d  →  forest teleop  (mundo: editar world: no YAML)"
+
+wait_nodes:
+  - marble_pose_from_gz

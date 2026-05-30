@@ -1,0 +1,29 @@
+api_version: forest.dev/v1
+name: sim-mvp-nav-imu
+description: MVP + EKF wheel+IMU (ekf_local.yaml) — Fase 0 comparação A/B
+
+lifecycle:
+  pre_start: cleanup_hybrid
+
+panel_only:
+  require_nodes:
+    - mission_manager_node
+    - navigation_node
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_hybrid_conf
+    launch: sim_mvp.launch.py
+    args:
+      world: mvp_empty_flat.sdf
+      use_rviz: true
+      ekf_mode: local
+
+wait_nodes:
+  - navigation_node
+  - mission_manager_node
+  - ekf_filter_node
+
+ui:
+  mission_panel_on_foreground: true

@@ -1,0 +1,31 @@
+api_version: forest.dev/v1
+name: sim-slam-nav
+description: MVP + EKF local + slam_toolbox (map→odom) + navegação — Fase 2
+
+lifecycle:
+  pre_start: cleanup_hybrid
+
+panel_only:
+  require_nodes:
+    - mission_manager_node
+    - navigation_node
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_hybrid_conf
+    launch: sim_mvp_slam.launch.py
+    args:
+      world: mvp_empty_flat.sdf
+      use_rviz: true
+      ekf_mode: local
+      paused: false
+
+wait_nodes:
+  - navigation_node
+  - mission_manager_node
+  - ekf_filter_node
+  - slam_toolbox
+
+ui:
+  mission_panel_on_foreground: true

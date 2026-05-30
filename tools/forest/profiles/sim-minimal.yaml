@@ -1,0 +1,18 @@
+api_version: forest.dev/v1
+name: sim-minimal
+description: Sim + pose bridge only (validação rápida)
+
+lifecycle:
+  pre_start: cleanup_hybrid
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_hybrid_conf
+    launch: sim_pose_bridge.launch.py
+    args:
+      world: mvp_empty_flat.sdf
+      use_rviz: false
+
+wait_nodes:
+  - marble_pose_from_gz

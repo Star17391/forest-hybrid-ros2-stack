@@ -1,0 +1,361 @@
+#!/usr/bin/env bash
+# Forest — single operational CLI entrypoint (Phase 1: up/down/status/cleanup)
+set -euo pipefail
+
+FOREST_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FOREST_ROOT="$(cd "${FOREST_BIN_DIR}/.." && pwd)"
+export FOREST_ROOT
+
+# shellcheck source=../lib/env.bash
+source "${FOREST_ROOT}/lib/env.bash"
+# shellcheck source=../lib/session.bash
+source "${FOREST_ROOT}/lib/session.bash"
+# shellcheck source=../lib/workflows.bash
+source "${FOREST_ROOT}/lib/workflows.bash"
+# shellcheck source=../lib/logs.bash
+source "${FOREST_ROOT}/lib/logs.bash"
+# shellcheck source=../lib/mission.bash
+source "${FOREST_ROOT}/lib/mission.bash"
+# shellcheck source=../lib/teleop.bash
+source "${FOREST_ROOT}/lib/teleop.bash"
+# shellcheck source=../lib/random_move.bash
+source "${FOREST_ROOT}/lib/random_move.bash"
+# shellcheck source=../lib/diag.bash
+source "${FOREST_ROOT}/lib/diag.bash"
+# shellcheck source=../lib/worlds.bash
+source "${FOREST_ROOT}/lib/worlds.bash"
+
+usage() {
+  cat <<EOF
+forest — Forest hybrid stack operations
+
+Usage:
+  forest status              Show active session (if any)
+  forest down [--force]      Stop session, cleanup, verify clean
+  forest cleanup [--hybrid]  Run forest_cleanup only
+  forest up <profile> [opts] Start profile (YAML, foreground by default)
+                             --lidar2d | --lidar3d selects sim LiDAR model
+  forest world list            List Gazebo worlds in FORESTGEN_PATH/worlds
+  forest profile [list]      List available profiles (alias: forest profiles)
+  forest profile validate <name>  Validate profile YAML
+  forest panel               Open mission panel (stack must be running)
+  forest teleop              Open teleop panel (→ /forest_gen/cmd_vel)
+  forest random_move         Exploração aleatória contínua (→ /forest_gen/cmd_vel)
+  forest test <workflow>     Run workflow (patrol-rect, goto, phase0-benchmark, …)
+  forest test -h             List workflows and examples
+  forest diag <name>         Diagnostics (imu, tf, lidar, imu-analyze, …)
+  forest attach panel        Open mission panel (alias)
+  forest attach teleop       Open teleop panel (alias)
+  forest logs [layer] [-f]   Tail session logs (ROS/Gazebo; default layer: all)
+  forest completion refresh  Reload Tab completion in this shell
+
+Options for up:
+  -d, --detach       Leave stack running in background
+  --panel-only       Open panel only (stack already up)
+  --headless         No RViz + detach (CI / servers)
+  --no-rviz          Disable RViz only
+  --world NAME       Gazebo world (.sdf); Tab lists FORESTGEN worlds
+  -w NAME            Alias for --world
+  --trunk-slice      LiDAR 3D: trunk_method=slice (fatias+continuidade)
+  --trunk-column     LiDAR 3D: trunk_method=column (legado)
+  --timeout SEC      wait_nodes timeout (default 120)
+
+Profiles (tools/forest/profiles/*.yaml):
+  sim-minimal        Sim + pose bridge (fast)
+  sim-pose-bridge    Pose bridge + nav (+ panel if foreground)
+  sim-mvp-nav        MVP + EKF wheel+IMU + nav (default world in YAML)
+  sim-mvp-nav-imu  MVP + EKF wheel+IMU (Fase 0 A/B)
+  sim-sensors-only   Sensors validation world
+  sim-teleop         Sim + mundo YAML (editar world:) + forest teleop
+
+Environment:
+  HYBRID_WS, FORESTGEN_PATH, FOREST_STATE_DIR
+  FOREST_USE_LEGACY_PROFILES=1  Prefer *.profile.bash over YAML
+
+Launch defaults: tools/forest/config/launch_defaults.yaml
+  Gazebo PLAY (paused:=false) em todos os perfis; launch_mode paused_manual para excepção
+
+Tab completion (install.sh + source ~/.bashrc; depois forest completion refresh):
+  bash ${FOREST_ROOT}/completions/install.sh && source ~/.bashrc
+  type forest   # deve ser "function" (wrapper)
+
+EOF
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  status)
+    forest_session_status
+    if forest_session_active; then
+      exit 0
+    fi
+    exit 1
+    ;;
+  down)
+    do_verify=true
+    force_lock=false
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --no-verify) do_verify=false ;;
+        --force) force_lock=true ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown: $1" >&2; exit 2 ;;
+      esac
+      shift
+    done
+    forest_session_down "$do_verify" "$force_lock"
+    ;;
+  cleanup)
+    hybrid=false
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --hybrid) hybrid=true ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Unknown: $1" >&2; exit 2 ;;
+      esac
+      shift
+    done
+    forest_source_ros || exit 1
+    if [[ "$hybrid" == "true" ]]; then
+      forest_run_cleanup --hybrid
+    else
+      forest_run_cleanup
+    fi
+    # Remove stale session if no layer processes survive.
+    if forest_session_active; then
+      local _any_alive=false
+      while IFS= read -r _pgid_line; do
+        [[ -z "$_pgid_line" ]] && continue
+        local _pg="${_pgid_line##* }"
+        if kill -0 "-${_pg}" 2>/dev/null; then
+          _any_alive=true
+          break
+        fi
+      done < <(python3 - "$FOREST_SESSION_FILE" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f:
+    layers = json.load(f).get("layers", [])
+for L in layers:
+    print(L["id"], L["pgid"])
+PY
+)
+      if [[ "$_any_alive" == "false" ]]; then
+        rm -f "$FOREST_SESSION_FILE"
+        echo "Session state cleared (all layer processes dead)."
+      fi
+    fi
+    ;;
+  profiles)
+    echo "NOTE: 'forest profiles' is an alias of 'forest profile list'" >&2
+    forest_profile_list
+    ;;
+  profile)
+    sub="${1:-list}"
+    shift || true
+    case "$sub" in
+      list|"")
+        forest_profile_list
+        ;;
+      validate)
+        name="${1:-}"
+        if [[ -z "$name" ]]; then
+          echo "ERROR: profile name required" >&2
+          exit 2
+        fi
+        python3 "${FOREST_ROOT}/lib/profile.py" validate \
+          "${FOREST_ROOT}/profiles/${name}.yaml"
+        ;;
+      *)
+        echo "Unknown: forest profile $sub" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  panel)
+    forest_source_ros || exit 1
+    forest_open_mission_panel
+    ;;
+  teleop)
+    forest_source_ros || exit 1
+    forest_open_teleop_panel
+    ;;
+  random_move|random-move)
+    forest_run_random_move "$@"
+    ;;
+  attach)
+    sub="${1:-}"
+    shift || true
+    case "$sub" in
+      panel) forest_source_ros || exit 1; forest_open_mission_panel ;;
+      teleop) forest_source_ros || exit 1; forest_open_teleop_panel ;;
+      logs) forest_logs_cmd "$@" ;;
+      -h|--help) usage; exit 0 ;;
+      *) echo "Unknown: forest attach $sub" >&2; exit 2 ;;
+    esac
+    ;;
+  logs)
+    forest_logs_cmd "$@"
+    ;;
+  test)
+    wf="${1:-}"
+    shift || true
+    if [[ -z "$wf" ]] || [[ "$wf" == "-h" ]] || [[ "$wf" == "--help" ]]; then
+      echo "Usage: forest test <workflow> [options...]"
+      echo ""
+      echo "Workflows (forest test <name>):"
+      forest_workflow_list | sed 's/^test-//' | sed 's/^/  /'
+      echo ""
+      echo "Examples:"
+      echo "  forest test patrol-rect"
+      echo "  forest test goto --assert"
+      echo "  forest test phase0-benchmark --label ekf_wheel_only --duration 90"
+      exit 0
+    fi
+    if [[ -f "${FOREST_ROOT}/workflows/test-${wf}.sh" ]]; then
+      forest_run_workflow "test-${wf}" "$@"
+    elif [[ -f "${FOREST_ROOT}/workflows/${wf}.sh" ]]; then
+      forest_run_workflow "${wf}" "$@"
+    else
+      forest_run_workflow "test-${wf}" "$@"
+    fi
+    ;;
+  diag)
+    forest_diag_run "$@"
+    ;;
+  completion)
+    sub="${1:-refresh}"
+    shift || true
+    case "$sub" in
+      refresh|sync)
+        # Sem wrapper bash, source num subprocess não actualiza o Tab da shell do utilizador.
+        if [[ "$(type -t forest 2>/dev/null || true)" == "function" ]]; then
+          echo "ERROR: forest() wrapper presente mas não tratou completion refresh." >&2
+          echo "  Reinstala: bash ${FOREST_ROOT}/completions/install.sh && source ~/.bashrc" >&2
+          exit 1
+        fi
+        bash "${FOREST_ROOT}/completions/sync_completions.sh"
+        echo ""
+        echo "Ficheiros de Tab actualizados. Para aplicar NESTA shell:"
+        echo "  source ${FOREST_ROOT}/completions/forest.bash"
+        echo ""
+        echo "Instalação Tab (PATH + wrapper) — caminho correcto:"
+        echo "  bash ${FOREST_ROOT}/completions/install.sh && source ~/.bashrc"
+        echo "  type forest   # deve ser 'function' (wrapper)"
+        ;;
+      -h|--help|help)
+        echo "Usage: forest completion refresh"
+        echo "  Actualiza commands.bash e recarrega Tab nesta shell."
+        ;;
+      *)
+        echo "Unknown: forest completion $sub (try: refresh)" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  world)
+    sub="${1:-list}"
+    shift || true
+    case "$sub" in
+      list|"")
+        forest_world_list
+        ;;
+      -h|--help)
+        echo "Usage: forest world list"
+        echo "  Mundos em \$FORESTGEN_PATH/worlds/*.sdf"
+        ;;
+      *)
+        echo "Unknown: forest world $sub (try: list)" >&2
+        exit 2
+        ;;
+    esac
+    ;;
+  up)
+    profile=""
+    detach=false
+    panel_only=false
+    headless=false
+    lidar_mode=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        -d|--detach) detach=true ;;
+        --panel-only) panel_only=true ;;
+        --lidar2d)
+          if [[ "$lidar_mode" == "3d" ]]; then
+            echo "ERROR: use só --lidar2d ou --lidar3d, não ambos" >&2
+            exit 2
+          fi
+          lidar_mode="2d"
+          ;;
+        --lidar3d)
+          if [[ "$lidar_mode" == "2d" ]]; then
+            echo "ERROR: use só --lidar2d ou --lidar3d, não ambos" >&2
+            exit 2
+          fi
+          lidar_mode="3d"
+          ;;
+        --headless)
+          headless=true
+          detach=true
+          ;;
+        --no-rviz) export FOREST_LAUNCH_OVERRIDES="${FOREST_LAUNCH_OVERRIDES:+$FOREST_LAUNCH_OVERRIDES,}use_rviz:=false" ;;
+        --world|-w)
+          shift
+          forest_world_apply_override "${1:?--world requires a name}"
+          ;;
+        --world=*|-w=*)
+          forest_world_apply_override "${1#*=}"
+          ;;
+        --trunk-slice)
+          export FOREST_LIDAR3D_TRUNK_SLICE=1
+          unset FOREST_LIDAR3D_TRUNK_COLUMN
+          ;;
+        --trunk-column)
+          export FOREST_LIDAR3D_TRUNK_COLUMN=1
+          unset FOREST_LIDAR3D_TRUNK_SLICE
+          ;;
+        --timeout)
+          shift
+          export FOREST_NODE_WAIT_TIMEOUT="${1:?--timeout requires seconds}"
+          ;;
+        -h|--help) usage; exit 0 ;;
+        -*)
+          echo "Unknown option: $1" >&2
+          exit 2
+          ;;
+        *)
+          if [[ -z "$profile" ]]; then
+            profile="$1"
+          else
+            echo "Unknown argument: $1" >&2
+            exit 2
+          fi
+          ;;
+      esac
+      shift
+    done
+    if [[ -n "$lidar_mode" ]]; then
+      export FOREST_LAUNCH_OVERRIDES="${FOREST_LAUNCH_OVERRIDES:+$FOREST_LAUNCH_OVERRIDES,}lidar_mode:=${lidar_mode}"
+      echo "forest: sim LiDAR mode=${lidar_mode}"
+    fi
+    if [[ -z "$profile" ]]; then
+      echo "ERROR: profile name required" >&2
+      usage
+      exit 2
+    fi
+    if [[ "$headless" == "true" ]]; then
+      export FOREST_LAUNCH_OVERRIDES="${FOREST_LAUNCH_OVERRIDES:+$FOREST_LAUNCH_OVERRIDES,}use_rviz:=false"
+    fi
+    forest_session_up_profile "$profile" "$detach" "$panel_only"
+    ;;
+  ""|-h|--help|help)
+    usage
+    exit 0
+    ;;
+  *)
+    echo "Unknown command: $cmd" >&2
+    usage
+    exit 2
+    ;;
+esac

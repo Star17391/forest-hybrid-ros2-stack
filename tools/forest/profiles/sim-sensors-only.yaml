@@ -1,0 +1,25 @@
+api_version: forest.dev/v1
+name: sim-sensors-only
+description: Gazebo sensores apenas — unified_forest_rocks (paridade run_sensors_validation.sh)
+
+lifecycle:
+  pre_start: cleanup
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_sim_bridge
+    launch: sim_gazebo.launch.py
+    args:
+      world: forest_gentle_trees_rocks.sdf
+      use_rviz: true
+      use_pose_bridge: true
+      use_sensor_tf_static: true
+      use_odom_relay: false
+
+ui:
+  launch_hint: "ROS logs: forest logs sim -f"
+
+wait_nodes:
+  - marble_pose_from_gz
+  - marble_sensor_tf_static

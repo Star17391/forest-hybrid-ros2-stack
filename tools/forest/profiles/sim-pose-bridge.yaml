@@ -1,0 +1,36 @@
+api_version: forest.dev/v1
+name: sim-pose-bridge
+description: Gazebo pose bridge + navegação (paridade run_pose_bridge_mission.sh)
+
+lifecycle:
+  pre_start: cleanup_hybrid
+
+panel_only:
+  require_nodes:
+    - mission_manager_node
+    - navigation_node
+    - marble_pose_from_gz
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_hybrid_conf
+    launch: sim_pose_bridge.launch.py
+    args:
+      world: mvp_empty_flat.sdf
+      use_rviz: true
+    delay_after_sec: 8
+
+  - id: nav
+    package: forest_hybrid_conf
+    launch: navigation_mvp.launch.py
+    args:
+      use_sim_time: true
+
+wait_nodes:
+  - marble_pose_from_gz
+  - mission_manager_node
+  - navigation_node
+
+ui:
+  mission_panel_on_foreground: true

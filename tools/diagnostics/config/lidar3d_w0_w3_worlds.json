@@ -1,0 +1,25 @@
+{
+  "profile": "sim-lidar3d-test",
+  "worlds": [
+    {
+      "id": "W0",
+      "world": "mvp_empty_flat",
+      "purpose": "TF, hz, performance baseline (sem relevo, sem árvores)"
+    },
+    {
+      "id": "W1",
+      "world": "forest_gentle_trees_rocks",
+      "purpose": "Árvores + relevo suave + rochas"
+    },
+    {
+      "id": "W2",
+      "world": "forest_rugged",
+      "purpose": "Relevo sem árvores (solo / gaps)"
+    },
+    {
+      "id": "W3",
+      "world": "forest_rugged_trees_rocks",
+      "purpose": "Integração: relevo + árvores + rochas"
+    }
+  ]
+}

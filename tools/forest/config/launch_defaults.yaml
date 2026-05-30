@@ -1,0 +1,21 @@
+# Defaults partilhados para arranque de simulação (Gazebo / RViz).
+# Merge: valores aqui < args explícitos no perfil YAML.
+#
+# Política Forest: Gazebo arranca em PLAY (unpaused). Evita falhas de TF/sensores
+# que só desaparecem após carregar PLAY manualmente.
+
+sim_launch:
+  cleanup_first: false
+  paused: false
+
+# Opcional: override por perfil via launch_mode (ex. paused manual para debug)
+modes:
+  paused_manual:
+    sim_launch:
+      paused: true
+    ui_hint: "Press PLAY in Gazebo to start the simulation."
+
+sim_layer_launches:
+  - sim_gazebo.launch.py
+  - sim_mvp.launch.py
+  - sim_pose_bridge.launch.py
