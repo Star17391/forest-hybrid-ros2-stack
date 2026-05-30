@@ -1,0 +1,9 @@
+[submodule "third_party/nicla_vision_drivers"]
+	path = third_party/nicla_vision_drivers
+	url = https://github.com/ADVRHumanoids/nicla_vision_drivers.git
+[submodule "src/external/nicla_vision_ros2"]
+	path = src/external/nicla_vision_ros2
+	url = https://github.com/ADVRHumanoids/nicla_vision_ros2.git
+[submodule "src/external/ydlidar_ros2_driver"]
+	path = src/external/ydlidar_ros2_driver
+	url = https://github.com/YDLIDAR/ydlidar_ros2_driver.git

@@ -3,5 +3,26 @@ install/
 log/
 *.pyc
 __pycache__/
+*.py[cod]
+.pytest_cache/
+
+src/drivers_stack/forest_nicla_vision_ros2/firmware/nicla_sensor_node/wifi_secrets.h
+config/forest_nicla_advr_config.local.h
+
 .idea/
 .vscode/*.log
+.cursor/
+
+# Personal notes / validation artifacts (not versioned)
+docs/
+reports/
+
+# Debug / session
+frames_*.gv
+frames_*.pdf
+*.bag
+*.db3
+tools/diagnostics/lidar3d_live_overlay.yaml
+
+# Third-party binaries
+tools/third_party/bin/
