@@ -24,10 +24,12 @@ public:
     declare_parameter<int>("model_input_width", 512);
     declare_parameter<int>("model_input_height", 384);
     declare_parameter<bool>("rgb_input", true);
+    declare_parameter<double>("min_logit_margin", 0.0);
 
     model_input_width_ = std::max(1, static_cast<int>(get_parameter("model_input_width").as_int()));
     model_input_height_ = std::max(1, static_cast<int>(get_parameter("model_input_height").as_int()));
     rgb_input_ = get_parameter("rgb_input").as_bool();
+    min_logit_margin_ = static_cast<float>(get_parameter("min_logit_margin").as_double());
     const auto onnx_path = get_parameter("onnx_model_path").as_string();
     try_load_model(onnx_path);
 
@@ -146,12 +148,19 @@ private:
         for (int x = 0; x < out_w; ++x) {
           int best_class = 0;
           float best_score = -1e30F;
+          float second_score = -1e30F;
           for (int c = 0; c < classes; ++c) {
             const float score = out.ptr<float>(0, c, y)[x];
             if (score > best_score) {
+              second_score = best_score;
               best_score = score;
               best_class = c;
+            } else if (score > second_score) {
+              second_score = score;
             }
+          }
+          if ((best_score - second_score) < min_logit_margin_) {
+            best_class = 0;  // low confidence -> void
           }
           mask.at<uint8_t>(y, x) = static_cast<uint8_t>(std::clamp(best_class, 0, 255));
         }
@@ -196,6 +205,7 @@ private:
   bool rgb_input_{true};
   int model_input_width_{512};
   int model_input_height_{384};
+  float min_logit_margin_{0.0F};
   cv::dnn::Net net_;
   rclcpp::Subscription<forest_hybrid_msgs::msg::OperationMode>::SharedPtr mode_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;

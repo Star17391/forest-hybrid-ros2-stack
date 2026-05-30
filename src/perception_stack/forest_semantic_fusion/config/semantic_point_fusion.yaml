@@ -1,0 +1,28 @@
+semantic_point_fusion_node:
+  ros__parameters:
+    points_topic: /sensors/lidar/points
+    mask_topic: /perception/semantic_mask
+    camera_info_topic: /camera/camera_info
+    output_topic: /perception/semantic_points
+    min_depth_m: 0.10
+    max_depth_m: 60.0
+    # 4x4 row-major transform lidar->camera.
+    # Replace with calibrated extrinsics when available.
+    extrinsics_lidar_to_camera_row_major:
+      - 1.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 1.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 1.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 0.0
+      - 1.0
+
