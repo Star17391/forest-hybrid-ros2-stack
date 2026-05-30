@@ -1,0 +1,22 @@
+# GNSS (NavSatFix) -> map/odom via robot_localization.
+# Datum: ajustar latitude/longitude/altitude ao local de teste (Porto area exemplo).
+navsat_transform:
+  ros__parameters:
+    frequency: 10.0
+    delay: 0.0
+    magnetic_declination_radians: 0.0
+    yaw_offset: 0.0
+    zero_altitude: true
+    broadcast_utm_transform: false
+    broadcast_utm_transform_as_parent_frame: false
+    publish_filtered_gps: true
+    use_odometry_yaw: true
+    wait_for_datum: false
+
+    # Tópicos (contrato stack)
+    imu0: /sensors/imu/data
+    gps_fix: /sensors/gnss/fix
+    odometry/filtered: /state/odometry
+
+    # Centro local ENU (substituir pelo local real / sim)
+    datum: [41.178, -8.595, 200.0]

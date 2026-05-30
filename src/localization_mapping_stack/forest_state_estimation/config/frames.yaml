@@ -1,0 +1,6 @@
+state_contract_node:
+  ros__parameters:
+    map_frame: "map"
+    base_frame: "marble_hd2/base_link"
+    publish_hz: 20.0
+    tf_timeout_sec: 0.05
