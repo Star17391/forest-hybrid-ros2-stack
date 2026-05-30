@@ -21,6 +21,7 @@ public:
     const geometry_msgs::msg::PoseStamped & goal,
     const nav_msgs::msg::Path & sparse_path,
     const nav_msgs::msg::Path & dense_path,
+    const std::vector<geometry_msgs::msg::PoseStamped> & route_waypoints,
     const geometry_msgs::msg::Point & lookahead,
     const std::vector<geometry_msgs::msg::Point> & trace) const;
 };

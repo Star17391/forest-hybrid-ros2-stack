@@ -10,6 +10,7 @@ namespace forest_navigation_ros2
 namespace
 {
 constexpr double kPi = 3.14159265358979323846;
+constexpr double kMinCarrotDist = 0.05;
 
 double yaw_from_quat(double x, double y, double z, double w)
 {
@@ -29,20 +30,87 @@ double normalize_angle(double a)
   return a;
 }
 
+double distance_xy(const geometry_msgs::msg::Point & a, const geometry_msgs::msg::Point & b)
+{
+  return std::hypot(b.x - a.x, b.y - a.y);
+}
+
 double path_length(const nav_msgs::msg::Path & path)
 {
   double len = 0.0;
   for (size_t i = 1; i < path.poses.size(); ++i) {
-    const double dx = path.poses[i].pose.position.x - path.poses[i - 1].pose.position.x;
-    const double dy = path.poses[i].pose.position.y - path.poses[i - 1].pose.position.y;
-    len += std::hypot(dx, dy);
+    len += distance_xy(
+      path.poses[i - 1].pose.position,
+      path.poses[i].pose.position);
   }
   return len;
 }
 
-double distance_xy(const geometry_msgs::msg::Point & a, const geometry_msgs::msg::Point & b)
+double remaining_path_length(const nav_msgs::msg::Path & path, size_t from_idx)
 {
-  return std::hypot(b.x - a.x, b.y - a.y);
+  double len = 0.0;
+  for (size_t i = from_idx + 1; i < path.poses.size(); ++i) {
+    len += distance_xy(
+      path.poses[i - 1].pose.position,
+      path.poses[i].pose.position);
+  }
+  return len;
+}
+
+struct SegmentProjection
+{
+  double distance;
+  size_t segment_start_idx;
+  double t;
+};
+
+SegmentProjection project_on_path(
+  double px, double py,
+  const nav_msgs::msg::Path & path,
+  size_t start_idx)
+{
+  SegmentProjection best;
+  best.distance = std::numeric_limits<double>::max();
+  best.segment_start_idx = start_idx;
+  best.t = 0.0;
+
+  for (size_t i = start_idx; i + 1 < path.poses.size(); ++i) {
+    const double ax = path.poses[i].pose.position.x;
+    const double ay = path.poses[i].pose.position.y;
+    const double bx = path.poses[i + 1].pose.position.x;
+    const double by = path.poses[i + 1].pose.position.y;
+    const double dx = bx - ax;
+    const double dy = by - ay;
+    const double seg_len_sq = dx * dx + dy * dy;
+
+    double t;
+    if (seg_len_sq < 1e-12) {
+      t = 0.0;
+    } else {
+      t = std::clamp(((px - ax) * dx + (py - ay) * dy) / seg_len_sq, 0.0, 1.0);
+    }
+
+    const double proj_x = ax + t * dx;
+    const double proj_y = ay + t * dy;
+    const double dist = std::hypot(px - proj_x, py - proj_y);
+
+    if (dist < best.distance) {
+      best.distance = dist;
+      best.segment_start_idx = i;
+      best.t = t;
+    }
+  }
+
+  if (best.distance == std::numeric_limits<double>::max() && !path.poses.empty()) {
+    const double d = std::hypot(
+      px - path.poses[start_idx].pose.position.x,
+      py - path.poses[start_idx].pose.position.y);
+    best.distance = d;
+    best.segment_start_idx = start_idx;
+    best.t = 0.0;
+  }
+
+  return best;
 }
 }  // namespace
 
@@ -57,10 +125,14 @@ PurePursuitController::PurePursuitController(
   max_angular_vel_(std::max(0.05, max_angular_vel)),
   goal_tolerance_m_(std::max(0.01, goal_tolerance_m)),
   goal_heading_tolerance_rad_(std::max(0.01, goal_heading_tolerance_rad)),
-  approach_radius_m_(0.6),
-  approach_linear_gain_(0.9),
-  approach_min_vel_(0.04)
+  approach_velocity_scaling_dist_(std::max(lookahead_m_, 2.0 * lookahead_m_)),
+  regulated_linear_scaling_min_radius_(std::max(0.1, lookahead_m_))
 {
+}
+
+void PurePursuitController::reset()
+{
+  last_closest_idx_ = 0;
 }
 
 void PurePursuitController::set_goal_tolerance_m(double v)
@@ -73,21 +145,42 @@ void PurePursuitController::set_goal_heading_tolerance_rad(double v)
   goal_heading_tolerance_rad_ = std::max(0.01, v);
 }
 
-void PurePursuitController::set_approach_radius_m(double v)
+void PurePursuitController::set_approach_velocity_scaling_dist(double v)
 {
-  approach_radius_m_ = std::max(goal_tolerance_m_ * 2.0, v);
+  approach_velocity_scaling_dist_ = std::max(lookahead_m_, v);
 }
 
-void PurePursuitController::set_lookahead_m(double v) { lookahead_m_ = std::max(0.1, v); }
-void PurePursuitController::set_max_linear_vel(double v) { max_linear_vel_ = std::max(0.05, v); }
-void PurePursuitController::set_max_angular_vel(double v) { max_angular_vel_ = std::max(0.05, v); }
+void PurePursuitController::set_regulated_linear_scaling_min_radius(double v)
+{
+  regulated_linear_scaling_min_radius_ = std::max(0.05, v);
+}
+
+void PurePursuitController::set_use_velocity_regulated_linear_scaling(bool v)
+{
+  use_velocity_regulated_linear_scaling_ = v;
+}
+
+void PurePursuitController::set_lookahead_m(double v)
+{
+  lookahead_m_ = std::max(0.1, v);
+}
+
+void PurePursuitController::set_max_linear_vel(double v)
+{
+  max_linear_vel_ = std::max(0.05, v);
+}
+
+void PurePursuitController::set_max_angular_vel(double v)
+{
+  max_angular_vel_ = std::max(0.05, v);
+}
 
 PursuitCommand PurePursuitController::compute(
   const geometry_msgs::msg::PoseStamped & pose,
-  const nav_msgs::msg::Path & path) const
+  const nav_msgs::msg::Path & path)
 {
   PursuitCommand out;
-  if (path.poses.empty()) {
+  if (path.poses.size() < 2) {
     return out;
   }
 
@@ -97,87 +190,84 @@ PursuitCommand PurePursuitController::compute(
     pose.pose.orientation.x, pose.pose.orientation.y,
     pose.pose.orientation.z, pose.pose.orientation.w);
 
-  const auto & goal_pt = path.poses.back().pose.position;
+  const auto & goal_pose = path.poses.back();
+  const auto & goal_pt = goal_pose.pose.position;
   out.goal_distance = distance_xy(pose.pose.position, goal_pt);
 
   const double goal_yaw = yaw_from_quat(
-    path.poses.back().pose.orientation.x,
-    path.poses.back().pose.orientation.y,
-    path.poses.back().pose.orientation.z,
-    path.poses.back().pose.orientation.w);
+    goal_pose.pose.orientation.x,
+    goal_pose.pose.orientation.y,
+    goal_pose.pose.orientation.z,
+    goal_pose.pose.orientation.w);
   out.heading_error = normalize_angle(goal_yaw - yaw);
+
+  if (last_closest_idx_ >= path.poses.size()) {
+    last_closest_idx_ = 0;
+  }
+
+  const auto proj = project_on_path(x, y, path, last_closest_idx_);
+  size_t closest_idx = proj.segment_start_idx;
+  if (proj.t > 0.5 && closest_idx + 1 < path.poses.size()) {
+    closest_idx = proj.segment_start_idx + 1;
+  }
+  last_closest_idx_ = closest_idx;
+  out.lateral_error = proj.distance;
+  out.remaining_path_m = remaining_path_length(path, closest_idx);
 
   if (out.goal_distance < goal_tolerance_m_ &&
     std::abs(out.heading_error) < goal_heading_tolerance_rad_)
   {
     out.goal_reached = true;
     out.progress_along_path = 1.0;
+    out.remaining_path_m = 0.0;
     return out;
   }
 
-  // Fase terminal: homing proporcional à distância (evita parar a ~0.5 m do goal).
-  if (out.goal_distance < approach_radius_m_) {
-    const double bearing = std::atan2(goal_pt.y - y, goal_pt.x - x);
-    const double steer_err = normalize_angle(bearing - yaw);
-    out.lookahead_point = goal_pt;
-
-    double v = std::min(max_linear_vel_, approach_linear_gain_ * out.goal_distance);
-    if (out.goal_distance > goal_tolerance_m_ * 2.0) {
-      v = std::max(approach_min_vel_, v);
-    } else {
-      v = std::min(v, max_linear_vel_ * 0.25);
-    }
-
-    double w = 2.0 * steer_err;
-    if (out.goal_distance < goal_tolerance_m_ * 4.0) {
-      w = 0.6 * steer_err + 0.4 * out.heading_error;
-    }
-    w = std::clamp(w, -max_angular_vel_, max_angular_vel_);
-
-    out.linear_x = v;
-    out.angular_z = w;
-    out.progress_along_path = std::clamp(
-      1.0 - out.goal_distance / std::max(approach_radius_m_, 1e-3), 0.0, 0.99);
-    return out;
-  }
-
-  size_t closest_idx = 0;
-  double closest_dist = std::numeric_limits<double>::max();
-  for (size_t i = 0; i < path.poses.size(); ++i) {
-    const double d = distance_xy(pose.pose.position, path.poses[i].pose.position);
-    if (d < closest_dist) {
-      closest_dist = d;
-      closest_idx = i;
-    }
-  }
-  out.lateral_error = closest_dist;
-
-  double acc = 0.0;
-  size_t lookahead_idx = closest_idx;
-  for (size_t i = closest_idx; i < path.poses.size(); ++i) {
-    if (i > closest_idx) {
-      const double dx = path.poses[i].pose.position.x - path.poses[i - 1].pose.position.x;
-      const double dy = path.poses[i].pose.position.y - path.poses[i - 1].pose.position.y;
-      acc += std::hypot(dx, dy);
-    }
-    lookahead_idx = i;
-    if (acc >= lookahead_m_) {
+  // Lookahead along path arc from closest point.
+  double arc = 0.0;
+  size_t carrot_idx = closest_idx;
+  for (size_t i = closest_idx + 1; i < path.poses.size(); ++i) {
+    arc += distance_xy(
+      path.poses[i - 1].pose.position,
+      path.poses[i].pose.position);
+    carrot_idx = i;
+    if (arc >= lookahead_m_) {
       break;
     }
   }
 
-  const auto & lp = path.poses[lookahead_idx].pose.position;
-  out.lookahead_point = lp;
+  const auto & carrot = path.poses[carrot_idx].pose.position;
+  out.lookahead_point = carrot;
 
-  const double alpha = normalize_angle(std::atan2(lp.y - y, lp.x - x) - yaw);
-  const double ld = std::max(lookahead_m_, 0.1);
-  const double curvature = 2.0 * std::sin(alpha) / ld;
+  const double carrot_dist = std::max(
+    distance_xy(pose.pose.position, carrot),
+    kMinCarrotDist);
 
+  const double alpha = normalize_angle(std::atan2(carrot.y - y, carrot.x - x) - yaw);
+  const double curvature = 2.0 * std::sin(alpha) / carrot_dist;
+
+  // --- Velocity regulation (Nav2 RPP style) ---
   double v = max_linear_vel_;
-  if (out.goal_distance < 2.0 * lookahead_m_) {
-    v = std::min(v, max_linear_vel_ * (out.goal_distance / (2.0 * lookahead_m_)));
+
+  if (use_velocity_regulated_linear_scaling_ && std::abs(curvature) > 1e-6) {
+    const double radius = 1.0 / std::abs(curvature);
+    if (radius < regulated_linear_scaling_min_radius_) {
+      v = max_linear_vel_ * (radius / regulated_linear_scaling_min_radius_);
+    }
   }
-  v = std::max(0.05, v);
+
+  if (approach_velocity_scaling_dist_ > 1e-6) {
+    const double approach_scale = std::clamp(
+      out.remaining_path_m / approach_velocity_scaling_dist_,
+      0.0, 1.0);
+    v = std::min(v, max_linear_vel_ * approach_scale);
+  }
+
+  if (std::abs(curvature) > 1e-6) {
+    v = std::min(v, max_angular_vel_ / std::abs(curvature));
+  }
+
+  v = std::clamp(v, 0.0, max_linear_vel_);
 
   double w = v * curvature;
   w = std::clamp(w, -max_angular_vel_, max_angular_vel_);
@@ -188,9 +278,9 @@ PursuitCommand PurePursuitController::compute(
   const double total = std::max(1e-3, path_length(path));
   double traveled = 0.0;
   for (size_t i = 1; i <= closest_idx && i < path.poses.size(); ++i) {
-    const double dx = path.poses[i].pose.position.x - path.poses[i - 1].pose.position.x;
-    const double dy = path.poses[i].pose.position.y - path.poses[i - 1].pose.position.y;
-    traveled += std::hypot(dx, dy);
+    traveled += distance_xy(
+      path.poses[i - 1].pose.position,
+      path.poses[i].pose.position);
   }
   out.progress_along_path = std::clamp(traveled / total, 0.0, 1.0);
 

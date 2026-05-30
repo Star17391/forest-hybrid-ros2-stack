@@ -1,16 +1,23 @@
 navigation_node:
   ros__parameters:
     use_sim_time: true
+    controller_type: nmpc
+    nmpc_horizon_tf: 2.0
+    nmpc_horizon_n: 25
     pose_topic: /state/pose_fused
     mission_goal_topic: /planning/mission_goal
+    mission_route_topic: /planning/mission_route
     cmd_vel_topic: /forest_gen/cmd_vel
     metrics_csv_path: /tmp/forest_navigation_metrics.csv
     control_rate_hz: 20.0
     trajectory_step_m: 0.25
-    lookahead_m: 1.0
+    lookahead_m: 1.2
     max_linear_vel: 0.5
     max_angular_vel: 1.0
-    goal_tolerance_m: 0.05
-    goal_heading_tolerance_rad: 0.15
-    approach_radius_m: 0.6
+    goal_tolerance_m: 0.35
+    waypoint_tolerance_m: 0.6
+    goal_heading_tolerance_rad: 0.35
+    approach_velocity_scaling_dist: 2.0
+    regulated_linear_scaling_min_radius: 0.9
+    use_velocity_regulated_linear_scaling: true
     map_frame: map

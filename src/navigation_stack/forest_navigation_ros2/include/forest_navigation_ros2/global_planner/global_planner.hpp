@@ -8,21 +8,20 @@
 namespace forest_navigation_ros2
 {
 
-/// Gera path esparso (polilinha) entre pose actual e objectivo.
-/// MVP: segmento recto; v2: múltiplos waypoints.
+/// Gera path esparso (polilinha) entre pose actual e objectivo(s).
 class GlobalPlanner
 {
 public:
-  /// Path com poses em ``frame_id`` (tipicamente ``map``): início → goal.
+  /// Path com poses em ``map``: início → goal (segmento recto).
   nav_msgs::msg::Path plan(
     const geometry_msgs::msg::PoseStamped & start,
     const geometry_msgs::msg::PoseStamped & goal) const;
 
-  /// v2: polilinha através de waypoints (inclui start e goal nas extremidades).
-  nav_msgs::msg::Path plan_through_waypoints(
+  /// Polilinha contínua: start → via_points[0] → … → via_points[N-1].
+  /// Orientação de cada vértice = tangente ao segmento de saída (último = tangente de entrada).
+  nav_msgs::msg::Path plan_polyline(
     const geometry_msgs::msg::PoseStamped & start,
-    const std::vector<geometry_msgs::msg::PoseStamped> & waypoints,
-    const geometry_msgs::msg::PoseStamped & goal) const;
+    const std::vector<geometry_msgs::msg::PoseStamped> & via_points) const;
 };
 
 }  // namespace forest_navigation_ros2

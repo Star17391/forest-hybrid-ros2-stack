@@ -1,16 +1,28 @@
 # Forest Navigation MVP
 
+## Build (NMPC)
+
+Requires acados + generated solver:
+
+```bash
+export ACADOS_SOURCE_DIR=$HOME/acados
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$ACADOS_SOURCE_DIR/lib
+bash scripts/generate_nmpc_solver.sh
+cd /path/to/forest-hybrid-ros2-stack
+colcon build --packages-select forest_navigation_ros2 --symlink-install
+```
+
+`controller_type`: `nmpc` (default) or `pure_pursuit`.
+
 Pipeline modular:
 
 ```
 /planning/mission_goal
   → global_planner (path esparso)
-  → local_planner (noop MVP)
+  → local_planner (refine)
   → trajectory_sampler (densificação)
-  → Pure Pursuit → /forest_gen/cmd_vel
+  → NMPC ou Pure Pursuit → /forest_gen/cmd_vel
   → feedback: /planning/progress, /planning/goal_reached, /planning/path_blocked
-  → debug: /planning/debug/markers, /planning/local_trajectory
-  → métricas CSV
 ```
 
 ## Sim (dois terminais)

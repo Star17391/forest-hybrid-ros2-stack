@@ -35,11 +35,26 @@ visualization_msgs::msg::MarkerArray NavigationViz::make_markers(
   const geometry_msgs::msg::PoseStamped & goal,
   const nav_msgs::msg::Path & sparse_path,
   const nav_msgs::msg::Path & dense_path,
+  const std::vector<geometry_msgs::msg::PoseStamped> & route_waypoints,
   const geometry_msgs::msg::Point & lookahead,
   const std::vector<geometry_msgs::msg::Point> & trace) const
 {
   visualization_msgs::msg::MarkerArray arr;
   int id = 0;
+
+  for (size_t i = 0; i < route_waypoints.size(); ++i) {
+    auto wp = make_marker_base(frame_id, stamp, id++, visualization_msgs::msg::Marker::CYLINDER);
+    wp.pose = route_waypoints[i].pose;
+    wp.scale.x = 0.28;
+    wp.scale.y = 0.28;
+    wp.scale.z = 0.5;
+    const bool is_final = (i + 1 == route_waypoints.size());
+    wp.color.r = is_final ? 0.1f : 0.9f;
+    wp.color.g = is_final ? 0.9f : 0.5f;
+    wp.color.b = is_final ? 0.2f : 0.1f;
+    wp.color.a = 1.0f;
+    arr.markers.push_back(wp);
+  }
 
   auto goal_m = make_marker_base(frame_id, stamp, id++, visualization_msgs::msg::Marker::SPHERE);
   goal_m.pose = goal.pose;
@@ -64,6 +79,7 @@ visualization_msgs::msg::MarkerArray NavigationViz::make_markers(
   arr.markers.push_back(pose_m);
 
   auto sparse_line = make_marker_base(frame_id, stamp, id++, visualization_msgs::msg::Marker::LINE_STRIP);
+  sparse_line.ns = "forest_navigation/sparse";
   sparse_line.scale.x = 0.06;
   sparse_line.color.r = 1.0f;
   sparse_line.color.g = 0.6f;
@@ -75,6 +91,7 @@ visualization_msgs::msg::MarkerArray NavigationViz::make_markers(
   arr.markers.push_back(sparse_line);
 
   auto dense_line = make_marker_base(frame_id, stamp, id++, visualization_msgs::msg::Marker::LINE_STRIP);
+  dense_line.ns = "forest_navigation/dense";
   dense_line.scale.x = 0.03;
   dense_line.color.r = 0.2f;
   dense_line.color.g = 0.8f;
@@ -86,6 +103,7 @@ visualization_msgs::msg::MarkerArray NavigationViz::make_markers(
   arr.markers.push_back(dense_line);
 
   auto la = make_marker_base(frame_id, stamp, id++, visualization_msgs::msg::Marker::SPHERE);
+  la.ns = "forest_navigation/lookahead";
   la.pose.position = lookahead;
   la.scale.x = 0.22;
   la.scale.y = 0.22;
@@ -97,6 +115,7 @@ visualization_msgs::msg::MarkerArray NavigationViz::make_markers(
   arr.markers.push_back(la);
 
   auto trace_line = make_marker_base(frame_id, stamp, id++, visualization_msgs::msg::Marker::LINE_STRIP);
+  trace_line.ns = "forest_navigation/trace";
   trace_line.scale.x = 0.04;
   trace_line.color.r = 0.9f;
   trace_line.color.g = 0.9f;
