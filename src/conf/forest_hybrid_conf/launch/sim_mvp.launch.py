@@ -1,39 +1,48 @@
-"""MVP completo: Gazebo (ForestGen worlds) + missão + navegação + RViz debug (hybrid stack).
+"""MVP completo: Gazebo + bridge + pose + navigation + mission + RViz.
 
-Requisitos:
-  - forest_gen_bringup instalado (mundos/modelos em share/forest_gen_bringup)
-  - forest_hybrid_conf + forest_navigation_ros2 + forest_planner_ros2
+All ROS2 logic comes from forest_sim_bridge (bridge nodes) and the hybrid
+navigation/planner packages. ForestGen only provides worlds/models via
+FORESTGEN_PATH env var.
 
-Uso:
+Usage:
   ros2 launch forest_hybrid_conf sim_mvp.launch.py
-  # Clica ▶ no Gazebo se paused:=true (default)
-  ros2 topic pub --once /mission/command forest_hybrid_msgs/msg/MissionCommand \\
-    "{command_type: 1, frame_type: 0, command_id: 'goto1', source: 'cli', target_x: 5.0, target_y: 0.0, target_z: 0.0}"
+  ros2 launch forest_hybrid_conf sim_mvp.launch.py world:=unified_forest_rocks.sdf
 """
 
 import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description() -> LaunchDescription:
     hybrid_share = get_package_share_directory("forest_hybrid_conf")
-    forest_share = get_package_share_directory("forest_gen_bringup")
+    sim_bridge_share = get_package_share_directory("forest_sim_bridge")
 
     use_sim_time = LaunchConfiguration("use_sim_time")
     world = LaunchConfiguration("world")
     paused = LaunchConfiguration("paused")
     cleanup_first = LaunchConfiguration("cleanup_first")
     use_rviz = LaunchConfiguration("use_rviz")
-    rviz_cfg = os.path.join(hybrid_share, "config", "forest_mvp_sim.rviz")
+    ekf_mode = LaunchConfiguration("ekf_mode")
+    rviz_delay = LaunchConfiguration("rviz_delay_sec")
+    # Default sensors tier (stable). Override: rviz_profile:=full or FOREST_RVIZ_PROFILE=minimal
+    _rviz_tier = os.environ.get("FOREST_RVIZ_PROFILE", "sensors")
+    _rviz_map = {
+        "minimal": "forest_mvp_minimal.rviz",
+        "sensors": "forest_mvp_sensors.rviz",
+        "full": "forest_mvp_sim.rviz",
+    }
+    rviz_cfg = os.path.join(
+        hybrid_share, "config", _rviz_map.get(_rviz_tier, _rviz_map["sensors"])
+    )
 
     sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(forest_share, "launch", "sim_rviz.launch.py")
+            os.path.join(sim_bridge_share, "launch", "sim_gazebo.launch.py")
         ),
         launch_arguments={
             "world": world,
@@ -41,13 +50,13 @@ def generate_launch_description() -> LaunchDescription:
             "cleanup_first": cleanup_first,
             "use_rviz": use_rviz,
             "rviz_config": rviz_cfg,
-            "use_keyboard": "false",
-            "use_cmd_vel_relay": "true",
-            "linear_scale": "2.5",
-            "angular_scale": "1.5",
-            "use_pose_bridge": "true",
+            "use_pose_bridge": "false",
             "use_sensor_tf_static": "true",
-            "use_odom_relay": "false",
+            "use_state_estimation": "true",
+            "use_odom_relay": "true",
+            "use_gnss": "false",
+            "ekf_mode": ekf_mode,
+            "rviz_delay_sec": rviz_delay,
         }.items(),
     )
 
@@ -57,27 +66,26 @@ def generate_launch_description() -> LaunchDescription:
         ),
         launch_arguments={"use_sim_time": use_sim_time}.items(),
     )
+    nav_stack_delayed = TimerAction(period=5.0, actions=[nav_stack])
 
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_sim_time", default_value="true"),
             DeclareLaunchArgument("use_rviz", default_value="true"),
+            DeclareLaunchArgument("world", default_value="mvp_empty_flat.sdf"),
+            DeclareLaunchArgument("paused", default_value="true"),
+            DeclareLaunchArgument("cleanup_first", default_value="true"),
             DeclareLaunchArgument(
-                "world",
-                default_value="mvp_empty_flat.sdf",
-                description="Mundo em share/forest_gen_bringup/worlds/",
+                "ekf_mode",
+                default_value="wheel_only",
+                description="wheel_only | local — EKF profile for Fase 0 A/B tests",
             ),
             DeclareLaunchArgument(
-                "paused",
-                default_value="true",
-                description="Gazebo pausado no arranque — clica ▶ antes de GOTO",
-            ),
-            DeclareLaunchArgument(
-                "cleanup_first",
-                default_value="true",
-                description="Mata processos zombies antes do Gazebo (desliga se já limpaste manualmente)",
+                "rviz_delay_sec",
+                default_value="8",
+                description="Seconds before RViz (Gazebo /clock must exist first)",
             ),
             sim,
-            nav_stack,
+            nav_stack_delayed,
         ]
     )

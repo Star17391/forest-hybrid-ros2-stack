@@ -1,4 +1,40 @@
+contract_version: 5
+
 layer_contracts:
+  utilities_layer:
+    description: >-
+      Estado global de modo (solo vs voo coaxial): parâmetro de configuração publicado periodicamente para as camadas de perceção e controlo não processarem trabalho desnecessário no ar.
+    outputs:
+      - topic: /system/locomotion_mode
+        type: forest_hybrid_msgs/msg/OperationMode
+        notes: "QoS transient local; valores mode_name ground|aerial."
+
+  mission_manager_layer:
+    description: >-
+      Camada de missão (FSM): comandos incluem CMD_CLEAR_EMERGENCY_LATCH após EMERGENCY_STOP; yaw opcional (use_target_yaw / waypoint_yaw); objetivo em map uma vez por perna; chegada com pose fundida. MissionCommand só FRAME_MAP ou FRAME_RELATIVE (GNSS convertido upstream).
+    inputs:
+      - topic: /mission/command
+        type: forest_hybrid_msgs/msg/MissionCommand
+      - topic: /mission/ack
+        type: forest_hybrid_msgs/msg/MissionAck
+      - topic: /state/pose_fused
+        type: geometry_msgs/msg/PoseStamped
+        notes: "frame_id map; usado para distância + heading até ao goal publicado."
+      - topic: /planning/progress
+        type: std_msgs/msg/Float32
+        notes: "Opcional UI; não completa waypoint."
+      - topic: /planning/path_blocked
+        type: std_msgs/msg/Bool
+      - topic: /planning/goal_reached
+        type: std_msgs/msg/Bool
+        notes: "Opcional se allow_goal_reached_topic_shortcut=true."
+    outputs:
+      - topic: /mission/status
+        type: forest_hybrid_msgs/msg/MissionStatus
+      - topic: /planning/mission_goal
+        type: geometry_msgs/msg/PoseStamped
+        notes: "Publicado uma vez por waypoint/perna; frame map."
+
   camera_driver_layer:
     description: "Aquisição de imagem RGB via USB (ou CSI no futuro)."
     outputs:
@@ -19,13 +55,33 @@ layer_contracts:
         type: sensor_msgs/msg/Image
         notes: "mono8; ID de classe por pixel."
 
+  sensor_preprocess_layer:
+    description: "Camada 0a: LiDAR bruto -> scan filtrado/nivelado (sem classificação solo/tronco)."
+    inputs:
+      - topic: /scan
+        type: sensor_msgs/msg/LaserScan
+      - topic: /sensors/imu/data
+        type: sensor_msgs/msg/Imu
+        notes: "Opcional; leveling Enhanced Hector."
+    outputs:
+      - topic: /sensors/lidar/scan
+        type: sensor_msgs/msg/LaserScan
+      - topic: /sensors/lidar/points
+        type: sensor_msgs/msg/PointCloud2
+      - topic: /sensors/wheel_odometry
+        type: nav_msgs/msg/Odometry
+        notes: "Fusão esteiras (sim/campo)."
+
   state_estimation_layer:
-    description: "Fase futura (FAST-LIO2)."
+    description: "Camada 0b: EKF robot_localization (rodas + IMU + GNSS opcional)."
     inputs:
       - topic: /sensors/imu/data
         type: sensor_msgs/msg/Imu
-      - topic: /sensors/lidar/points
-        type: sensor_msgs/msg/PointCloud2
+      - topic: /sensors/wheel_odometry
+        type: nav_msgs/msg/Odometry
+      - topic: /sensors/gnss/fix
+        type: sensor_msgs/msg/NavSatFix
+        notes: "Opcional; covariância define peso no EKF."
     outputs:
       - topic: /state/pose_fused
         type: geometry_msgs/msg/PoseStamped
@@ -39,6 +95,9 @@ layer_contracts:
         type: sensor_msgs/msg/PointCloud2
       - topic: /perception/semantic_mask
         type: sensor_msgs/msg/Image
+      - topic: /perception/semantic_points
+        type: sensor_msgs/msg/PointCloud2
+        notes: "Nuvem com labels por ponto (late fusion RGB+LiDAR)."
       - topic: /state/pose_fused
         type: geometry_msgs/msg/PoseStamped
     outputs:
@@ -48,7 +107,8 @@ layer_contracts:
         type: voxblox_msgs/msg/Layer
 
   planning_decision_layer:
-    description: "Fase futura; planeamento global/local e decisão de modo."
+    description: >-
+      Fase futura: planeamento global/local e trajetória local. Em v1 o modo solo/aéreo vem do utilities_layer; numa versão futura esta camada pode passar também a emitir decisões dinâmicas em /system/locomotion_mode.
     inputs:
       - topic: /mapping/traversability_map
         type: grid_map_msgs/msg/GridMap
@@ -56,11 +116,17 @@ layer_contracts:
         type: voxblox_msgs/msg/Layer
       - topic: /state/pose_fused
         type: geometry_msgs/msg/PoseStamped
+      - topic: /planning/mission_goal
+        type: geometry_msgs/msg/PoseStamped
     outputs:
       - topic: /planning/local_trajectory
         type: nav_msgs/msg/Path
-      - topic: /system/locomotion_mode
-        type: forest_hybrid_msgs/msg/OperationMode
+      - topic: /planning/progress
+        type: std_msgs/msg/Float32
+      - topic: /planning/path_blocked
+        type: std_msgs/msg/Bool
+      - topic: /planning/goal_reached
+        type: std_msgs/msg/Bool
 
   control_layer:
     description: "Fase futura; NMPC para atuação."

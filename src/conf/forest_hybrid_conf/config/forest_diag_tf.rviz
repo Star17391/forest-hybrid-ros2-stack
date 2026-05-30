@@ -1,0 +1,84 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 78
+    Name: Displays
+    Tree Height: 220
+  - Class: rviz_common/Time
+    Experimental: false
+    Name: Time
+    SyncMode: 1
+    SyncSource: /clock
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Enabled: true
+      Name: Grid
+    - Class: rviz_default_plugins/TF
+      Enabled: true
+      Frame Timeout: 30
+      Name: TF
+      Show Axes: true
+      Show Names: true
+    - Class: rviz_default_plugins/Pose
+      Enabled: true
+      Name: Pose fused
+      Topic:
+        Value: /state/pose_fused
+    - Class: rviz_default_plugins/Odometry
+      Enabled: true
+      Name: Wheel odom
+      Topic:
+        Value: /sensors/wheel_odometry
+    - Class: rviz_default_plugins/Odometry
+      Enabled: true
+      Name: EKF odom
+      Topic:
+        Value: /state/odometry
+    - Class: rviz_default_plugins/LaserScan
+      Enabled: true
+      Name: Lidar scan
+      Topic:
+        Reliability Policy: Best Effort
+        Value: /sensors/lidar/scan
+  Enabled: true
+  Global Options:
+    Background Color: 48; 48; 48
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Enable Stereo Rendering: false
+      Invert Z Axis: false
+      Name: Current View
+      Near Clip Distance: 0.01
+      Target Frame: <Fixed Frame>
+      Distance: 12
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0
+      Pitch: 0.6
+      Yaw: 0.9
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 1040
+  Hide Left Dock: false
+  Hide Right Dock: true
+  QMainWindow State: 000000ff00000000fd0000000200000000000000b400000234fc0200000001fbffffffff0100000000000002340000001a00ffffff000000030000031c0000001afc0100000001fbffffffff01000000000000031c0000004100ffffff000002620000023400000004000000040000000800000008fc00000000
+  Time:
+    collapsed: false
+  Width: 1920
+  X: 0
+  Y: 0

@@ -13,11 +13,14 @@ from launch_ros.actions import Node
 
 def generate_launch_description() -> LaunchDescription:
     use_sim_time = LaunchConfiguration("use_sim_time")
-    operation_mode = LaunchConfiguration("operation_mode")
+    enable_camera = LaunchConfiguration("enable_camera")
     camera_backend = LaunchConfiguration("camera_backend")
+    enable_operation_mode = LaunchConfiguration("enable_operation_mode")
+    operation_mode = LaunchConfiguration("operation_mode")
     onnx_model_path = LaunchConfiguration("onnx_model_path")
     model_input_width = LaunchConfiguration("model_input_width")
     model_input_height = LaunchConfiguration("model_input_height")
+    enable_semantic_fusion = LaunchConfiguration("enable_semantic_fusion")
 
     camera_pi_launch = os.path.join(
         get_package_share_directory("forest_camera_ros2"),
@@ -38,14 +41,24 @@ def generate_launch_description() -> LaunchDescription:
                 description="Sincronizar com relógio de simulação",
             ),
             DeclareLaunchArgument(
-                "operation_mode",
-                default_value="ground",
-                description="ground | aerial — em aerial a segmentação não processa imagens",
-            ),
-            DeclareLaunchArgument(
                 "camera_backend",
                 default_value="usb",
                 description="usb | csi (csi usa camera_ros/libcamera)",
+            ),
+            DeclareLaunchArgument(
+                "enable_operation_mode",
+                default_value="true",
+                description="Publicar /system/locomotion_mode via operation_mode_node",
+            ),
+            DeclareLaunchArgument(
+                "operation_mode",
+                default_value="ground",
+                description="ground | aerial (apenas se enable_operation_mode=true)",
+            ),
+            DeclareLaunchArgument(
+                "enable_camera",
+                default_value="true",
+                description="true para lançar camada de câmara; false para testes sem câmara",
             ),
             DeclareLaunchArgument(
                 "onnx_model_path",
@@ -62,15 +75,24 @@ def generate_launch_description() -> LaunchDescription:
                 default_value="384",
                 description="Altura de entrada do modelo ONNX",
             ),
+            DeclareLaunchArgument(
+                "enable_semantic_fusion",
+                default_value="false",
+                description="Publicar /perception/semantic_points (late fusion RGB+LiDAR).",
+            ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(camera_usb_launch),
                 launch_arguments={"use_sim_time": use_sim_time}.items(),
-                condition=IfCondition(PythonExpression(["'", camera_backend, "' == 'usb'"])),
+                condition=IfCondition(
+                    PythonExpression(["'", enable_camera, "' == 'true' and '", camera_backend, "' == 'usb'"])
+                ),
             ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(camera_pi_launch),
                 launch_arguments={"use_sim_time": use_sim_time}.items(),
-                condition=IfCondition(PythonExpression(["'", camera_backend, "' == 'csi'"])),
+                condition=IfCondition(
+                    PythonExpression(["'", enable_camera, "' == 'true' and '", camera_backend, "' == 'csi'"])
+                ),
             ),
             Node(
                 package="forest_robot_supervisor",
@@ -78,8 +100,19 @@ def generate_launch_description() -> LaunchDescription:
                 name="operation_mode_node",
                 output="screen",
                 parameters=[
-                    {"operation_mode": operation_mode, "use_sim_time": use_sim_time},
+                    {"use_sim_time": use_sim_time},
+                    {"operation_mode": operation_mode},
                 ],
+                condition=IfCondition(
+                    PythonExpression(["'", enable_operation_mode, "' == 'true'"])
+                ),
+            ),
+            Node(
+                package="forest_planner_ros2",
+                executable="mission_manager_node",
+                name="mission_manager_node",
+                output="screen",
+                parameters=[{"use_sim_time": use_sim_time}],
             ),
             Node(
                 package="forest_semantic_segmentation",
@@ -94,6 +127,16 @@ def generate_launch_description() -> LaunchDescription:
                         "model_input_height": model_input_height,
                     }
                 ],
+            ),
+            Node(
+                package="forest_semantic_fusion",
+                executable="semantic_point_fusion_node",
+                name="semantic_point_fusion_node",
+                output="screen",
+                parameters=[{"use_sim_time": use_sim_time}],
+                condition=IfCondition(
+                    PythonExpression(["'", enable_semantic_fusion, "' == 'true'"])
+                ),
             ),
         ]
     )

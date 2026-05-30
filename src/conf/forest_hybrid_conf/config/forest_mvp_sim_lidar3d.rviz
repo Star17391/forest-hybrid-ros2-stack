@@ -7,7 +7,7 @@ Panels:
         - /Global Options1
         - /TF1
         - /Pose fused (EKF)1
-        - /LiDAR 2D (scan processado)1
+        - /LiDAR 3D (nuvem Gazebo)1
         - /LiDAR classificado (solo/outro)1
       Splitter Ratio: 0.5
     Tree Height: 500
@@ -53,8 +53,8 @@ Visualization Manager:
       Class: rviz_default_plugins/Map
       Color Scheme: map
       Draw Behind: true
-      Enabled: true
-      Name: SLAM map
+      Enabled: false
+      Name: SLAM map (desligado sem slam_toolbox)
       Topic:
         Depth: 1
         Durability Policy: Transient Local
@@ -156,8 +156,8 @@ Visualization Manager:
       Color: 255; 80; 80
       Color Transformer: FlatColor
       Decay Time: 0
-      Enabled: true
-      Name: LiDAR 2D (scan processado)
+      Enabled: false
+      Name: LiDAR 2D (scan processado — só modo 2D)
       Size (m): 0.04
       Style: Points
       Topic:
@@ -192,8 +192,8 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: FlatColor
       Decay Time: 0
-      Enabled: false
-      Name: LiDAR 2D (nuvem — mesmo scan)
+      Enabled: true
+      Name: LiDAR 3D (nuvem Gazebo)
       Size (m): 0.04
       Style: Points
       Topic:
@@ -211,10 +211,10 @@ Visualization Manager:
       Color: 255; 80; 80
       Color Transformer: FlatColor
       Decay Time: 0
-      Enabled: false
+      Enabled: true
       Max Intensity: 4
       Min Intensity: 0
-      Name: LiDAR classificado (solo/outro)
+      Name: LiDAR classificado (solo/outro, frame map)
       Size (m): 0.04
       Style: Points
       Topic:
@@ -225,6 +225,97 @@ Visualization Manager:
         Value: /perception/lidar/points_labeled
       Use Fixed Frame: true
       Use rainbow: true
+    - Autocompute Intensity Bounds: true
+      Class: rviz_default_plugins/PointCloud2
+      Color: 50; 200; 50
+      Color Transformer: FlatColor
+      Enabled: true
+      Name: Ground connected (Sprint 1)
+      Size (m): 0.05
+      Style: Points
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /perception/lidar3d/ground
+      Use Fixed Frame: true
+    - Autocompute Intensity Bounds: true
+      Class: rviz_default_plugins/PointCloud2
+      Color: 200; 50; 200
+      Color Transformer: FlatColor
+      Enabled: true
+      Name: Ground suspended (debug)
+      Size (m): 0.06
+      Style: Points
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /perception/lidar3d/ground_suspended
+      Use Fixed Frame: true
+    - Autocompute Intensity Bounds: true
+      Class: rviz_default_plugins/PointCloud2
+      Color: 139; 69; 19
+      Color Transformer: FlatColor
+      Enabled: true
+      Name: Trunks (Fase 1)
+      Size (m): 0.06
+      Style: Points
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /perception/lidar3d/trunks
+      Use Fixed Frame: true
+    - Autocompute Intensity Bounds: true
+      Class: rviz_default_plugins/PointCloud2
+      Color: 255; 50; 50
+      Color Transformer: FlatColor
+      Enabled: true
+      Name: Obstacles (Fase 1)
+      Size (m): 0.06
+      Style: Points
+      Topic:
+        Depth: 1
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /perception/lidar3d/obstacles
+      Use Fixed Frame: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: true
+      Name: Ground mesh only (2.5D grid)
+      Namespaces:
+        terrain_ground_mesh: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /perception/lidar3d/terrain_mesh
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Trunk cylinders (Fase 1)
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /perception/lidar3d/trunk_markers
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Tree landmarks (tracked)
+      Namespaces:
+        tree_landmarks: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /perception/lidar3d/tree_landmarks
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
