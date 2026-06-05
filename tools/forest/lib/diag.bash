@@ -25,11 +25,14 @@ lidar3d-stack   LiDAR 3D: TF chain, hz, gaps (requer sim + PLAY)
 lidar3d-tilt    LiDAR 3D: diagnóstico slope/pitch/transform errors
 lidar3d-seg     Fase 1: segmentation audit (ground/trunk/obstacle %)
 lidar3d-slice   Slice trunk rejections (30s, needs debug_stats + teleop)
+lidar3d-exp-tune  Web UI live tuning CSF+clustering (port 8766)
+lidar3d-exp-audit Pipeline experimental: funnel + root-cause hints
 pose         Compare pose_fused vs Gazebo world_tf (quick)
 pose-benchmark  Fase 0: CSV+JSON+PNG vs GT (--label, --duration)
 ekf-latency  Fase 0: sensor/EKF rates and latency JSON
 phase0-compare  Compare two metrics.json (A/B); pass paths after name
 world        Audit ForestGen world/model collisions
+hybrid-joints  Lagartas/pernas: joints Gazebo, joint_state, cmd_pos, ROS status
 EOF
 }
 
@@ -95,6 +98,14 @@ forest_diag_run() {
       forest_source_ros || return 1
       exec python3 "${FOREST_DIAG_ROOT}/lidar3d_slice_debug.py" "$@"
       ;;
+    lidar3d-exp-tune)
+      forest_source_ros || return 1
+      exec python3 "${FOREST_DIAG_ROOT}/lidar3d_experimental_live_tuning.py" "$@"
+      ;;
+    lidar3d-exp-audit)
+      forest_source_ros || return 1
+      exec python3 "${FOREST_DIAG_ROOT}/lidar3d_experimental_pipeline_audit.py" "$@"
+      ;;
     pose)
       forest_source_ros || return 1
       exec python3 "${FOREST_DIAG_ROOT}/compare_pose_sources.py" "$@"
@@ -112,6 +123,10 @@ forest_diag_run() {
       ;;
     world)
       exec python3 "${FOREST_DIAG_ROOT}/audit_world_collisions.py" "$@"
+      ;;
+    hybrid-joints)
+      forest_source_ros || return 1
+      exec bash "${FOREST_DIAG_ROOT}/hybrid_joints_diag.sh" "$@"
       ;;
     ""|-h|--help|help|list)
       echo "forest diag <name> [args...]"

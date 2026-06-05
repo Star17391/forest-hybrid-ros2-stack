@@ -23,6 +23,7 @@ frames_*.pdf
 *.bag
 *.db3
 tools/diagnostics/lidar3d_live_overlay.yaml
+tools/diagnostics/lidar3d_experimental_overlay.yaml
 
 # Third-party binaries
 tools/third_party/bin/

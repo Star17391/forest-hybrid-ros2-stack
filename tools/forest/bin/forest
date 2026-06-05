@@ -58,6 +58,8 @@ Options for up:
   -w NAME            Alias for --world
   --trunk-slice      LiDAR 3D: trunk_method=slice (fatias+continuidade)
   --trunk-column     LiDAR 3D: trunk_method=column (legado)
+  --lidar3d-experimental   Ativa pipeline CSF experimental (paralela à legacy)
+  --lidar3d-experimental-only  Só experimental (desliga legacy segmentation)
   --timeout SEC      wait_nodes timeout (default 120)
 
 Profiles (tools/forest/profiles/*.yaml):
@@ -65,8 +67,12 @@ Profiles (tools/forest/profiles/*.yaml):
   sim-pose-bridge    Pose bridge + nav (+ panel if foreground)
   sim-mvp-nav        MVP + EKF wheel+IMU + nav (default world in YAML)
   sim-mvp-nav-imu  MVP + EKF wheel+IMU (Fase 0 A/B)
+  sim-lidar3d-test   LiDAR 3D + legacy segmentation + RViz
+  sim-lidar3d-experimental  LiDAR 3D legacy + CSF experimental (A/B)
+  sim-lidar3d-csf-only      LiDAR 3D só CSF experimental
   sim-sensors-only   Sensors validation world
   sim-teleop         Sim + mundo YAML (editar world:) + forest teleop
+  sim-hybrid-test    Mundo plano + robô híbrido + FSM transição ground→aerial
 
 Environment:
   HYBRID_WS, FORESTGEN_PATH, FOREST_STATE_DIR
@@ -314,6 +320,12 @@ PY
         --trunk-column)
           export FOREST_LIDAR3D_TRUNK_COLUMN=1
           unset FOREST_LIDAR3D_TRUNK_SLICE
+          ;;
+        --lidar3d-experimental)
+          export FOREST_LAUNCH_OVERRIDES="${FOREST_LAUNCH_OVERRIDES:+$FOREST_LAUNCH_OVERRIDES,}use_experimental_lidar3d:=true"
+          ;;
+        --lidar3d-experimental-only)
+          export FOREST_LAUNCH_OVERRIDES="${FOREST_LAUNCH_OVERRIDES:+$FOREST_LAUNCH_OVERRIDES,}use_experimental_lidar3d:=true,use_legacy_lidar3d:=false"
           ;;
         --timeout)
           shift

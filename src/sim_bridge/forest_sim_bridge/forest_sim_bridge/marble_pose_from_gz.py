@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 """Publish ``/state/pose_fused`` and ``map -> marble_hd2/base_link`` from Gazebo.
 
-Uses ``dynamic_pose`` (only moving entities) as primary source and
-``pose/info`` (all entities) as fallback.  Picks the robot by matching
-``model_name`` in the ``child_frame_id`` when populated, otherwise uses
-the **best moving transform** (highest cumulative motion score) and latches
-the index for the rest of the session.
+Primary source: Gazebo ``pose/info`` read **directly via gz.transport**, where
+each pose carries its entity ``name``.  We select the entry whose name equals
+``model_name`` (the model's canonical link = base_link in world frame).  This is
+robust: the ros_gz_bridge strips entity names when converting ``Pose_V`` to
+``TFMessage`` (all ``child_frame_id`` come out empty), so the bridged topics
+cannot be matched by name on the ROS side.
+
+The bridged ``TFMessage`` topics remain as a degraded fallback (index heuristic)
+only if the gz.transport source is unavailable.
 
 When a real localizer (FAST-LIO2, etc.) is available, it publishes
 ``/state/pose_fused`` directly and this bridge is disabled.
@@ -15,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import math
+import threading
 
 import rclpy
 from builtin_interfaces.msg import Time as TimeMsg
@@ -24,6 +29,14 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from tf2_msgs.msg import TFMessage
 from tf2_ros import TransformBroadcaster
+
+try:
+    from gz.msgs10.pose_v_pb2 import Pose_V
+    from gz.transport13 import Node as GzTransportNode
+
+    _GZ_TRANSPORT_OK = True
+except ImportError:  # pragma: no cover - gz python bindings absent
+    _GZ_TRANSPORT_OK = False
 
 
 def _yaw_from_quat(q: Quaternion) -> float:
@@ -55,8 +68,9 @@ class MarblePoseFromGz(Node):
     def __init__(self) -> None:
         super().__init__("marble_pose_from_gz")
 
-        self.declare_parameter("source_topic", "/forest_gen/gz/world_tf")
-        self.declare_parameter("fallback_source_topic", "/forest_gen/gz/world_tf_full")
+        # pose/info tem frame_id (base_link); dynamic_pose não — latch em hélice = pião no RViz
+        self.declare_parameter("source_topic", "/forest_gen/gz/world_tf_full")
+        self.declare_parameter("fallback_source_topic", "/forest_gen/gz/world_tf")
         self.declare_parameter("fallback_timeout_sec", 1.0)
         self.declare_parameter("model_name", "marble_hd2")
         self.declare_parameter("parent_frame", "map")
@@ -66,6 +80,11 @@ class MarblePoseFromGz(Node):
         self.declare_parameter("seed_x", 0.0)
         self.declare_parameter("seed_y", 0.0)
         self.declare_parameter("seed_z", 0.35)
+        # Authoritative source: gz pose/info read directly (carries entity names).
+        self.declare_parameter("gz_pose_topic", "/world/unified_world/pose/info")
+        self.declare_parameter("use_gz_direct", True)
+        # If gz-direct delivered within this window, ignore the bridged TF fallback.
+        self.declare_parameter("gz_direct_timeout_sec", 0.5)
 
         src = self.get_parameter("source_topic").get_parameter_value().string_value
         fb = self.get_parameter("fallback_source_topic").get_parameter_value().string_value
@@ -84,6 +103,16 @@ class MarblePoseFromGz(Node):
         self._seed_x = self.get_parameter("seed_x").get_parameter_value().double_value
         self._seed_y = self.get_parameter("seed_y").get_parameter_value().double_value
         self._seed_z = self.get_parameter("seed_z").get_parameter_value().double_value
+        self._gz_pose_topic = (
+            self.get_parameter("gz_pose_topic").get_parameter_value().string_value
+        )
+        self._use_gz_direct = (
+            self.get_parameter("use_gz_direct").get_parameter_value().bool_value
+            and _GZ_TRANSPORT_OK
+        )
+        self._gz_direct_timeout = max(
+            0.1, self.get_parameter("gz_direct_timeout_sec").get_parameter_value().double_value
+        )
 
         qos = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE)
         self._pub_pose = self.create_publisher(PoseStamped, "/state/pose_fused", 10)
@@ -99,15 +128,33 @@ class MarblePoseFromGz(Node):
         self._last_source_stamp: TimeMsg | None = None
 
         self._latched_tf_index: int | None = None
-        self._tf_index_origin: dict[int, tuple[float, float, float]] = {}
-        self._tf_index_motion: dict[int, float] = {}
+        self._tf_index_history: dict[int, list[tuple[float, float, float, float]]] = {}
+        self._unnamed_samples = 0
+
+        # gz.transport direct source (authoritative, name-matched).
+        self._gz_lock = threading.Lock()
+        self._gz_last_rx = self.get_clock().now()
+        self._gz_node: GzTransportNode | None = None
+        if self._use_gz_direct:
+            self._gz_node = GzTransportNode()
+            if self._gz_node.subscribe(Pose_V, self._gz_pose_topic, self._on_gz_pose):
+                self.get_logger().info(
+                    f"gz.transport pose source: {self._gz_pose_topic} "
+                    f"(matching entity name '{self._model}')"
+                )
+            else:
+                self.get_logger().error(
+                    f"gz.transport subscribe failed on {self._gz_pose_topic}; "
+                    f"falling back to bridged TF heuristic"
+                )
+                self._use_gz_direct = False
 
         self._timer = self.create_timer(1.0 / hz, self._tick_republish)
 
         self.get_logger().info(
             f"-> /state/pose_fused + /tf "
-            f"(primary={src}, fallback={self._fallback_topic or 'none'}) "
-            f"republish {hz:.0f} Hz"
+            f"(gz_direct={self._use_gz_direct}, primary={src}, "
+            f"fallback={self._fallback_topic or 'none'}) republish {hz:.0f} Hz"
         )
 
     # ── Named transform matching ──
@@ -140,15 +187,33 @@ class MarblePoseFromGz(Node):
 
     # ── Unnamed transform matching (Pose_V with empty frame_ids) ──
 
-    def _motion_score(self, idx: int, geom: Transform) -> float:
+    def _stability_cost(self, idx: int, geom: Transform) -> float:
+        """Lower is better. Reject spinning props (high yaw rate) and world origin."""
+        z = float(geom.translation.z)
+        if z < 0.12 or z > 6.0:
+            return float("inf")
         x, y = geom.translation.x, geom.translation.y
-        yaw = _yaw_from_quat(geom.rotation)
-        if idx not in self._tf_index_origin:
-            self._tf_index_origin[idx] = (x, y, yaw)
-        ox, oy, oyaw = self._tf_index_origin[idx]
-        score = (x - ox) ** 2 + (y - oy) ** 2 + (abs(_normalize_angle(yaw - oyaw)) * 0.35) ** 2
-        self._tf_index_motion[idx] = max(self._tf_index_motion.get(idx, 0.0), score)
-        return score
+        if abs(x) < 1e-4 and abs(y) < 1e-4:
+            return float("inf")
+        q = geom.rotation
+        yaw = _yaw_from_quat(q)
+        hist = self._tf_index_history.setdefault(idx, [])
+        hist.append((x, y, yaw, z))
+        if len(hist) > 12:
+            del hist[:-12]
+        if len(hist) < 4:
+            return float("inf")
+        max_dyaw = 0.0
+        max_dxy = 0.0
+        for i in range(1, len(hist)):
+            max_dyaw = max(
+                max_dyaw, abs(_normalize_angle(hist[i][2] - hist[i - 1][2]))
+            )
+            max_dxy = max(
+                max_dxy,
+                math.hypot(hist[i][0] - hist[i - 1][0], hist[i][1] - hist[i - 1][1]),
+            )
+        return abs(z - self._seed_z) + max_dyaw * 8.0 + max_dxy * 2.0
 
     def _pick_unnamed(self, msg: TFMessage) -> TransformStamped | None:
         if not msg.transforms:
@@ -160,26 +225,81 @@ class MarblePoseFromGz(Node):
                 return msg.transforms[idx]
             return None
 
+        self._unnamed_samples += 1
         best_idx: int | None = None
-        best_score = -1.0
+        best_cost = float("inf")
         for idx, tf in enumerate(msg.transforms):
-            self._motion_score(idx, tf.transform)
-            hist = self._tf_index_motion.get(idx, 0.0)
-            if hist > best_score:
-                best_score = hist
+            cost = self._stability_cost(idx, tf.transform)
+            if cost < best_cost:
+                best_cost = cost
                 best_idx = idx
 
-        if best_idx is not None and best_score > 0.01:
+        if best_idx is not None and best_cost < float("inf") and self._unnamed_samples >= 8:
             self._latched_tf_index = best_idx
+            z = msg.transforms[best_idx].transform.translation.z
             self.get_logger().info(
-                f"Latched Gazebo transform index {best_idx} "
-                f"(motion={math.sqrt(best_score):.3f} m)"
+                f"Latched stable Pose_V index {best_idx} (cost={best_cost:.2f}, z={z:.3f}) "
+                f"— evita hélice em rotação"
             )
             return msg.transforms[best_idx]
 
-        if best_idx is not None:
+        if best_idx is not None and self._unnamed_samples < 8:
             return msg.transforms[best_idx]
         return None
+
+    # ── gz.transport direct source (authoritative, name-matched) ──
+
+    def _gz_match(self, name: str) -> int:
+        """Selection priority for a gz entity name (lower = better, -1 = reject)."""
+        if name == self._child or name == f"{self._model}/base_link":
+            return 0
+        if name == self._model:
+            return 1
+        if name == "base_link":
+            return 2
+        return -1
+
+    def _on_gz_pose(self, msg: Pose_V) -> None:
+        """Runs on a gz.transport thread; stash the named base pose for the ROS timer."""
+        best_rank = 99
+        best = None
+        for p in msg.pose:
+            r = self._gz_match(p.name)
+            if r >= 0 and r < best_rank:
+                best_rank = r
+                best = p
+        if best is None:
+            return
+
+        geom = Transform()
+        geom.translation.x = float(best.position.x)
+        geom.translation.y = float(best.position.y)
+        geom.translation.z = float(best.position.z)
+        geom.rotation.x = float(best.orientation.x)
+        geom.rotation.y = float(best.orientation.y)
+        geom.rotation.z = float(best.orientation.z)
+        geom.rotation.w = float(best.orientation.w)
+
+        stamp = TimeMsg()
+        stamp.sec = int(msg.header.stamp.sec)
+        stamp.nanosec = int(msg.header.stamp.nsec)
+
+        with self._gz_lock:
+            self._last_geom = geom
+            self._last_source_stamp = stamp
+            self._gz_last_rx = self.get_clock().now()
+            if not self._got_any_pose:
+                self.get_logger().info(
+                    f"First pose from gz.transport '{best.name}' "
+                    f"(z={geom.translation.z:.3f}) -- publishing."
+                )
+                self._got_any_pose = True
+
+    def _gz_direct_fresh(self) -> bool:
+        if not self._use_gz_direct:
+            return False
+        age = (self.get_clock().now() - self._gz_last_rx).nanoseconds * 1e-9
+        return age <= self._gz_direct_timeout
 
     # ── Timestamp handling ──
 
@@ -226,10 +346,19 @@ class MarblePoseFromGz(Node):
     # ── Callbacks ──
 
     def _consume_tf(self, msg: TFMessage, source: str) -> None:
+        # Authoritative gz.transport source wins; ignore the bridged (name-stripped) TF.
+        if self._gz_direct_fresh():
+            return
         chosen = self._pick_named(msg)
         if chosen is None:
             chosen = self._pick_unnamed(msg)
         if chosen is None:
+            return
+
+        g = chosen.transform
+        if self._latched_tf_index is not None and abs(g.translation.x) < 1e-6 and abs(
+            g.translation.y
+        ) < 1e-6:
             return
 
         stamp = self._best_stamp(chosen.header.stamp)
@@ -260,12 +389,14 @@ class MarblePoseFromGz(Node):
         Avançar o stamp a cada 20 Hz sem nova pose do Gazebo faz o RViz
         interpolar/extrapolar no tempo de simulação mais depressa que o modelo 3D.
         """
-        if self._last_geom is None:
+        with self._gz_lock:
+            geom = self._last_geom
+            stamp = self._last_source_stamp
+        if geom is None:
             return
-        stamp = self._last_source_stamp
         if stamp is None or _stamp_is_zero(stamp):
             stamp = self.get_clock().now().to_msg()
-        self._publish(self._last_geom, stamp)
+        self._publish(geom, stamp)
 
 
 def main() -> None:

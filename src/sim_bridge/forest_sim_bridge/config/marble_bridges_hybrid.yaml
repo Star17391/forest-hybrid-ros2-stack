@@ -1,0 +1,171 @@
+# ros_gz_bridge: forest_hybrid_robot (instance marble_hd2) + hybrid reconfiguration topics.
+# Extends ground bridges (cmd_vel, tracks, IMU, pose) with joint yaw + multicopter.
+
+- ros_topic_name: /clock
+  gz_topic_name: /world/unified_world/clock
+  ros_type_name: rosgraph_msgs/msg/Clock
+  gz_type_name: gz.msgs.Clock
+  direction: GZ_TO_ROS
+  lazy: false
+
+- ros_topic_name: /forest_gen/gz/world_tf
+  gz_topic_name: /world/unified_world/dynamic_pose/info
+  ros_type_name: tf2_msgs/msg/TFMessage
+  gz_type_name: gz.msgs.Pose_V
+  direction: GZ_TO_ROS
+  lazy: true
+
+- ros_topic_name: /forest_gen/gz/world_tf_full
+  gz_topic_name: /world/unified_world/pose/info
+  ros_type_name: tf2_msgs/msg/TFMessage
+  gz_type_name: gz.msgs.Pose_V
+  direction: GZ_TO_ROS
+  lazy: true
+
+- ros_topic_name: /forest_gen/cmd_vel
+  gz_topic_name: /model/marble_hd2/cmd_vel
+  ros_type_name: geometry_msgs/msg/Twist
+  gz_type_name: gz.msgs.Twist
+  direction: ROS_TO_GZ
+  lazy: false
+
+- ros_topic_name: /model/marble_hd2/link/left_track/track_cmd_vel
+  gz_topic_name: /model/marble_hd2/link/left_track/track_cmd_vel
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: BIDIRECTIONAL
+  lazy: false
+
+- ros_topic_name: /model/marble_hd2/link/right_track/track_cmd_vel
+  gz_topic_name: /model/marble_hd2/link/right_track/track_cmd_vel
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: BIDIRECTIONAL
+  lazy: false
+
+- ros_topic_name: /forest_gen/gz/left_track_odometry_raw
+  gz_topic_name: /model/marble_hd2/link/left_track/odometry
+  ros_type_name: nav_msgs/msg/Odometry
+  gz_type_name: gz.msgs.Odometry
+  direction: GZ_TO_ROS
+  lazy: false
+  frame_id: odom
+
+- ros_topic_name: /forest_gen/gz/right_track_odometry_raw
+  gz_topic_name: /model/marble_hd2/link/right_track/odometry
+  ros_type_name: nav_msgs/msg/Odometry
+  gz_type_name: gz.msgs.Odometry
+  direction: GZ_TO_ROS
+  lazy: false
+  frame_id: odom
+
+- ros_topic_name: /sensors/imu/data_raw
+  gz_topic_name: /world/unified_world/model/marble_hd2/link/base_link/sensor/imu_sensor/imu
+  ros_type_name: sensor_msgs/msg/Imu
+  gz_type_name: gz.msgs.IMU
+  direction: GZ_TO_ROS
+  lazy: false
+  qos_profile: SENSOR_DATA
+  frame_id: marble_hd2/base_link
+
+- ros_topic_name: /camera/image_raw
+  gz_topic_name: /world/unified_world/model/marble_hd2/link/base_link/sensor/camera_front/image
+  ros_type_name: sensor_msgs/msg/Image
+  gz_type_name: gz.msgs.Image
+  direction: GZ_TO_ROS
+  lazy: true
+  qos_profile: SENSOR_DATA
+  frame_id: marble_hd2/camera_front_optical
+
+- ros_topic_name: /camera/camera_info
+  gz_topic_name: /world/unified_world/model/marble_hd2/link/base_link/sensor/camera_front/camera_info
+  ros_type_name: sensor_msgs/msg/CameraInfo
+  gz_type_name: gz.msgs.CameraInfo
+  direction: GZ_TO_ROS
+  lazy: true
+  qos_profile: SENSOR_DATA
+  frame_id: marble_hd2/camera_front_optical
+
+- ros_topic_name: /scan
+  gz_topic_name: /world/unified_world/model/marble_hd2/link/base_link/sensor/front_laser/scan
+  ros_type_name: sensor_msgs/msg/LaserScan
+  gz_type_name: gz.msgs.LaserScan
+  direction: GZ_TO_ROS
+  lazy: false
+  qos_profile: SENSOR_DATA
+  frame_id: laser
+
+# Track module rotation (JointPositionController sub_topic in SDF)
+- ros_topic_name: /forest_gen/hybrid/left_track_yaw_cmd
+  gz_topic_name: /model/marble_hd2/hybrid/left_track_yaw/cmd_pos
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+  lazy: false
+
+- ros_topic_name: /forest_gen/hybrid/right_track_yaw_cmd
+  gz_topic_name: /model/marble_hd2/hybrid/right_track_yaw/cmd_pos
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+  lazy: false
+
+# Pernas de suporte (prismatic, 4× mesmo comando via FSM)
+- ros_topic_name: /forest_gen/hybrid/support_leg_fl_cmd
+  gz_topic_name: /model/marble_hd2/hybrid/support_leg_fl/cmd_pos
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+  lazy: false
+
+- ros_topic_name: /forest_gen/hybrid/support_leg_fr_cmd
+  gz_topic_name: /model/marble_hd2/hybrid/support_leg_fr/cmd_pos
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+  lazy: false
+
+- ros_topic_name: /forest_gen/hybrid/support_leg_rl_cmd
+  gz_topic_name: /model/marble_hd2/hybrid/support_leg_rl/cmd_pos
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+  lazy: false
+
+- ros_topic_name: /forest_gen/hybrid/support_leg_rr_cmd
+  gz_topic_name: /model/marble_hd2/hybrid/support_leg_rr/cmd_pos
+  ros_type_name: std_msgs/msg/Float64
+  gz_type_name: gz.msgs.Double
+  direction: ROS_TO_GZ
+  lazy: false
+
+# JointStatePublisher default topic is world-scoped (not /model/...).
+- ros_topic_name: /forest_gen/hybrid/joint_states
+  gz_topic_name: /world/unified_world/model/marble_hd2/joint_state
+  ros_type_name: sensor_msgs/msg/JointState
+  gz_type_name: gz.msgs.Model
+  direction: GZ_TO_ROS
+  lazy: false
+
+# MulticopterVelocityControl: tópicos gz = robotNamespace + sub_topic (não /model/...)
+- ros_topic_name: /forest_gen/hybrid/aerial_cmd_vel
+  gz_topic_name: /marble_hd2/gazebo/command/twist
+  ros_type_name: geometry_msgs/msg/Twist
+  gz_type_name: gz.msgs.Twist
+  direction: ROS_TO_GZ
+  lazy: false
+
+- ros_topic_name: /forest_gen/hybrid/multicopter_enable
+  gz_topic_name: /marble_hd2/enable
+  ros_type_name: std_msgs/msg/Bool
+  gz_type_name: gz.msgs.Boolean
+  direction: ROS_TO_GZ
+  lazy: false
+
+# Debug/monitor motor speeds (published by hybrid_aerial_motor_controller via gz.transport)
+- ros_topic_name: /forest_gen/hybrid/motor_speed
+  gz_topic_name: /marble_hd2/gazebo/command/motor_speed
+  ros_type_name: actuator_msgs/msg/Actuators
+  gz_type_name: gz.msgs.Actuators
+  direction: GZ_TO_ROS
+  lazy: true

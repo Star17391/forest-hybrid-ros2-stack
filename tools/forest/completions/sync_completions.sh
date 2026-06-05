@@ -22,7 +22,7 @@ FOREST_CLI_ATTACH_SUBS="panel teleop logs"
 FOREST_CLI_LOGS_OPTS="-f --follow -n --grep -h --help"
 FOREST_CLI_PROFILE_SUBS="list validate"
 FOREST_CLI_WORLD_SUBS="list"
-FOREST_CLI_UP_OPTS="-d --detach --panel-only --headless --no-rviz --lidar2d --lidar3d --world -w --timeout -h --help"
+FOREST_CLI_UP_OPTS="-d --detach --panel-only --headless --no-rviz --lidar2d --lidar3d --lidar3d-experimental --lidar3d-experimental-only --world -w --trunk-slice --trunk-column --timeout -h --help"
 EOF
 }
 

@@ -1,0 +1,21 @@
+api_version: forest.dev/v1
+name: sim-hybrid-test
+description: Mundo plano + robô híbrido (lagartas 90° + voo) + FSM de transição
+
+lifecycle:
+  pre_start: cleanup_hybrid
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_hybrid_conf
+    launch: sim_hybrid_test.launch.py
+    args:
+      world: mvp_empty_flat.sdf
+      use_rviz: true
+      paused: false
+
+wait_nodes:
+  - hybrid_transition_manager
+  - hybrid_aerial_motor_controller
+  - marble_pose_from_gz

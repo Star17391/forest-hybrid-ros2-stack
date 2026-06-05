@@ -43,11 +43,21 @@ def _lidar_mode_robot_model(lidar_mode: str) -> str | None:
     return None
 
 
+def _resolve_robot_model(lidar_mode: str, sim_robot_model: str) -> str | None:
+    """Explicit sim_robot_model wins over lidar_mode mapping."""
+    explicit = sim_robot_model.strip()
+    if explicit:
+        return explicit
+    return _lidar_mode_robot_model(lidar_mode)
+
+
 def _prepare_world_with_robot_model(world_path: Path, robot_model: str | None) -> Path:
     if not robot_model:
         return world_path
     text = world_path.read_text(encoding="utf-8")
-    pattern = r"(<uri>\s*)model://forest_tracked_robot(\s*</uri>)"
+    pattern = (
+        r"(<uri>\s*)model://(?:forest_tracked_robot|forest_hybrid_robot)(\s*</uri>)"
+    )
     if not re.search(pattern, text):
         raise RuntimeError(
             f"World {world_path} has no model://forest_tracked_robot include; "
@@ -86,8 +96,10 @@ def _opaque_setup(context, *_args, **_kwargs):
     share = Path(get_package_share_directory("forest_sim_bridge"))
     world_path = _resolve_world(context)
     lidar_mode = LaunchConfiguration("lidar_mode").perform(context).strip()
-    robot_model = _lidar_mode_robot_model(lidar_mode)
+    sim_robot_model = LaunchConfiguration("sim_robot_model").perform(context).strip()
+    robot_model = _resolve_robot_model(lidar_mode, sim_robot_model)
     world_path = _prepare_world_with_robot_model(world_path, robot_model)
+    use_hybrid_robot = robot_model == "forest_hybrid_robot"
     use_lidar_3d = robot_model == "forest_tracked_robot_lidar3d"
 
     forestgen = os.environ.get(
@@ -109,11 +121,12 @@ def _opaque_setup(context, *_args, **_kwargs):
     from launch import LaunchDescription
     from launch.actions import IncludeLaunchDescription
 
-    bridge_yaml = (
-        share / "config" / "marble_bridges_lidar3d.yaml"
-        if use_lidar_3d
-        else share / "config" / "marble_bridges.yaml"
-    )
+    if use_hybrid_robot:
+        bridge_yaml = share / "config" / "marble_bridges_hybrid.yaml"
+    elif use_lidar_3d:
+        bridge_yaml = share / "config" / "marble_bridges_lidar3d.yaml"
+    else:
+        bridge_yaml = share / "config" / "marble_bridges.yaml"
 
     bridge = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -216,8 +229,8 @@ def _opaque_setup(context, *_args, **_kwargs):
         parameters=[
             use_sim,
             {
-                "source_topic": "/forest_gen/gz/world_tf",
-                "fallback_source_topic": "/forest_gen/gz/world_tf_full",
+                "source_topic": "/forest_gen/gz/world_tf_full",
+                "fallback_source_topic": "/forest_gen/gz/world_tf",
                 "fallback_timeout_sec": 1.0,
                 "model_name": "marble_hd2",
                 "parent_frame": "map",
@@ -332,34 +345,59 @@ def _opaque_setup(context, *_args, **_kwargs):
         parameters=[use_sim, lidar_classify_yaml],
     )
 
-    # Fase 1: 3D segmentation (ground/trunks/obstacles) — só em modo 3D.
+    # Fase 1: 3D segmentation legacy (ground/trunks/obstacles) — só em modo 3D.
     lidar3d_seg = None
+    lidar3d_exp = None
+    use_legacy_lidar3d = LaunchConfiguration("use_legacy_lidar3d").perform(context).strip().lower()
+    use_legacy_lidar3d = use_legacy_lidar3d not in ("0", "false", "no")
+    use_experimental_lidar3d = LaunchConfiguration("use_experimental_lidar3d").perform(
+        context
+    ).strip().lower() in ("1", "true", "yes")
     if use_lidar_3d:
         seg_share = get_package_share_directory("forest_3d_perception")
-        seg_yaml = os.environ.get(
-            "FOREST_LIDAR3D_SEG_CONFIG",
-            os.path.join(seg_share, "config", "forest_3d_segmentation.yaml"),
-        )
-        seg_params = [use_sim, seg_yaml]
-        slice_overlay = os.path.join(seg_share, "config", "forest_3d_segmentation_slice.yaml")
-        column_overlay = os.path.join(seg_share, "config", "forest_3d_segmentation_column.yaml")
-        use_slice = os.environ.get("FOREST_LIDAR3D_TRUNK_SLICE", "").strip().lower() in (
-            "1", "true", "yes"
-        ) or "segmentation_slice" in os.path.basename(seg_yaml)
-        use_column = os.environ.get("FOREST_LIDAR3D_TRUNK_COLUMN", "").strip().lower() in (
-            "1", "true", "yes"
-        ) or "segmentation_column" in os.path.basename(seg_yaml)
-        if os.path.isfile(slice_overlay) and use_slice:
-            seg_params.append(slice_overlay)
-        elif os.path.isfile(column_overlay) and use_column:
-            seg_params.append(column_overlay)
-        lidar3d_seg = Node(
-            package="forest_3d_perception",
-            executable="lidar3d_segmentation_node",
-            name="lidar3d_segmentation_node",
-            output="screen",
-            parameters=seg_params,
-        )
+        if use_legacy_lidar3d:
+            seg_yaml = os.environ.get(
+                "FOREST_LIDAR3D_SEG_CONFIG",
+                os.path.join(seg_share, "config", "forest_3d_segmentation.yaml"),
+            )
+            seg_params = [use_sim, seg_yaml]
+            slice_overlay = os.path.join(seg_share, "config", "forest_3d_segmentation_slice.yaml")
+            column_overlay = os.path.join(
+                seg_share, "config", "forest_3d_segmentation_column.yaml"
+            )
+            use_slice = os.environ.get("FOREST_LIDAR3D_TRUNK_SLICE", "").strip().lower() in (
+                "1", "true", "yes"
+            ) or "segmentation_slice" in os.path.basename(seg_yaml)
+            use_column = os.environ.get("FOREST_LIDAR3D_TRUNK_COLUMN", "").strip().lower() in (
+                "1", "true", "yes"
+            ) or "segmentation_column" in os.path.basename(seg_yaml)
+            if os.path.isfile(slice_overlay) and use_slice:
+                seg_params.append(slice_overlay)
+            elif os.path.isfile(column_overlay) and use_column:
+                seg_params.append(column_overlay)
+            lidar3d_seg = Node(
+                package="forest_3d_perception",
+                executable="lidar3d_segmentation_node",
+                name="lidar3d_segmentation_node",
+                output="screen",
+                parameters=seg_params,
+            )
+        if use_experimental_lidar3d:
+            exp_yaml = os.environ.get(
+                "FOREST_LIDAR3D_EXPERIMENTAL_CONFIG",
+                os.path.join(seg_share, "config", "lidar3d_experimental.yaml"),
+            )
+            exp_params = [use_sim, exp_yaml]
+            exp_overlay = os.environ.get("FOREST_LIDAR3D_EXPERIMENTAL_OVERLAY", "").strip()
+            if exp_overlay and os.path.isfile(exp_overlay):
+                exp_params.append(exp_overlay)
+            lidar3d_exp = Node(
+                package="forest_3d_perception",
+                executable="lidar3d_experimental_node",
+                name="lidar3d_experimental_node",
+                output="screen",
+                parameters=exp_params,
+            )
 
     # Pose-bridge mode: no EKF → TF is map→base only; track odom headers use map (not orphan odom).
     track_odom_parent = "map" if (use_pose_bridge and not use_state_est) else "odom"
@@ -407,11 +445,66 @@ def _opaque_setup(context, *_args, **_kwargs):
             parameters=[use_sim],
         )
 
+    use_hybrid_transition = LaunchConfiguration("use_hybrid_transition").perform(context).lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+    def _hybrid_transition_params() -> dict:
+        params = {
+            "spawn_z_m": 0.35,
+            "airborne_z_threshold_m": 0.55,
+            "rotate_tracks_for_aerial": True,
+            "use_stock_multicopter_lee": False,
+        }
+        optional_float = (
+            ("hybrid_leg_deployed_m", "leg_extension_deployed_m"),
+            ("hybrid_min_leg_extend_sec", "min_leg_extend_sec"),
+            ("hybrid_min_tracks_rotate_sec", "min_tracks_rotate_sec"),
+            ("hybrid_min_aerial_ready_sec", "min_aerial_ready_sec"),
+        )
+        for launch_key, param_key in optional_float:
+            raw = LaunchConfiguration(launch_key).perform(context).strip()
+            if raw:
+                params[param_key] = float(raw)
+        leg_off = LaunchConfiguration("hybrid_disable_leg_commands").perform(context).strip().lower()
+        if leg_off in ("1", "true", "yes"):
+            params["disable_leg_commands"] = True
+        return params
+
+    hybrid_transition = None
+    if use_hybrid_transition or use_hybrid_robot:
+        hybrid_transition = Node(
+            package="forest_sim_bridge",
+            executable="hybrid_transition_manager",
+            name="hybrid_transition_manager",
+            output="screen",
+            parameters=[use_sim, _hybrid_transition_params()],
+        )
+
+    hybrid_aerial_motor = None
+    if use_hybrid_transition or use_hybrid_robot:
+        hybrid_aerial_motor = Node(
+            package="forest_sim_bridge",
+            executable="hybrid_aerial_motor_controller",
+            name="hybrid_aerial_motor_controller",
+            output="screen",
+            parameters=[
+                use_sim,
+                {"mass_kg": 5.84, "motor_constant": 1.25e-4, "spin_up_sec": 2.5},
+            ],
+        )
+
     # RViz must start after Gazebo publishes /clock — early start crashes Ogre (no GL buffers).
     main_actions = [
         bridge,
         gz,
     ]
+    if hybrid_transition is not None:
+        main_actions.append(hybrid_transition)
+    if hybrid_aerial_motor is not None:
+        main_actions.append(hybrid_aerial_motor)
     if map_odom_early is not None:
         main_actions.append(map_odom_early)
     if lidar_tf_early is not None:
@@ -434,6 +527,8 @@ def _opaque_setup(context, *_args, **_kwargs):
     )
     if lidar3d_seg is not None:
         main_actions.append(lidar3d_seg)
+    if lidar3d_exp is not None:
+        main_actions.append(lidar3d_exp)
     if state_estimation is None:
         legacy_nodes = [n for n in (sensor_tf_static, lidar_scan_preprocess, lidar_scan_to_cloud) if n]
         if imu_sanitize_legacy is not None:
@@ -510,6 +605,51 @@ def generate_launch_description() -> LaunchDescription:
                 "lidar_mode",
                 default_value="",
                 description="2d | 3d — selects ForestGen robot model and sensor pipeline",
+            ),
+            DeclareLaunchArgument(
+                "sim_robot_model",
+                default_value="",
+                description="ForestGen model URI name (e.g. forest_hybrid_robot)",
+            ),
+            DeclareLaunchArgument(
+                "use_hybrid_transition",
+                default_value="false",
+                description="Start hybrid_transition_manager (auto true with forest_hybrid_robot)",
+            ),
+            DeclareLaunchArgument(
+                "hybrid_leg_deployed_m",
+                default_value="",
+                description="Override leg_extension_deployed_m (e.g. 0.0 for ablation)",
+            ),
+            DeclareLaunchArgument(
+                "hybrid_min_leg_extend_sec",
+                default_value="",
+                description="Min dwell in LEGS_EXTENDING before TRACKS_ROTATING",
+            ),
+            DeclareLaunchArgument(
+                "hybrid_min_tracks_rotate_sec",
+                default_value="",
+                description="Min dwell in TRACKS_ROTATING before AERIAL_READY",
+            ),
+            DeclareLaunchArgument(
+                "hybrid_min_aerial_ready_sec",
+                default_value="",
+                description="Min dwell in AERIAL_READY before AERIAL_FLY",
+            ),
+            DeclareLaunchArgument(
+                "hybrid_disable_leg_commands",
+                default_value="false",
+                description="FSM unchanged; do not publish support leg cmd_pos",
+            ),
+            DeclareLaunchArgument(
+                "use_legacy_lidar3d",
+                default_value="true",
+                description="Legacy lidar3d_segmentation_node (grid/nDSM/slice)",
+            ),
+            DeclareLaunchArgument(
+                "use_experimental_lidar3d",
+                default_value="false",
+                description="Parallel CSF + clustering pipeline (lidar3d_experimental_node)",
             ),
             DeclareLaunchArgument("world", default_value="mvp_empty_flat.sdf"),
             DeclareLaunchArgument("world_path", default_value="",
