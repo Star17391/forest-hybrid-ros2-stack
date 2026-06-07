@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>forest_hybrid_flight</name>
+  <version>0.1.0</version>
+  <description>Executor do "salto aéreo" híbrido: transição terra→ar, voo MAVLink (ArduPilot) e regresso ao solo.</description>
+  <maintainer email="tese@fe.up.pt">tese</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>forest_hybrid_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

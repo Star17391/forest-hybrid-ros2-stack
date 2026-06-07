@@ -80,11 +80,16 @@ LOGDIR="$(mktemp -d "${FOREST_STATE_DIR:-/tmp}/sitl.XXXXXX")"
 GZ_PID=""; SITL_PID=""
 
 cleanup() {
-  [[ "$KEEP" == "true" ]] && { echo "[--keep] processos mantidos. logs: $LOGDIR"; return; }
+  echo "[cleanup] a terminar processos…"
   [[ -n "$SITL_PID" ]] && kill "$SITL_PID" 2>/dev/null || true
   [[ -n "$GZ_PID" ]] && kill "$GZ_PID" 2>/dev/null || true
-  pkill -f "arducopter.*-I0" 2>/dev/null || true
+  pkill -TERM -x arducopter 2>/dev/null || true
+  pkill -TERM -f 'sim[_]vehicle' 2>/dev/null || true
   sleep 1
+  pkill -KILL -x arducopter 2>/dev/null || true
+  pkill -KILL -f 'sim[_]vehicle' 2>/dev/null || true
+  fuser -k 5760/tcp 2>/dev/null || true
+  [[ "$KEEP" == "true" ]] && echo "[--keep] logs: $LOGDIR"
 }
 trap cleanup EXIT
 

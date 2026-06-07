@@ -384,18 +384,18 @@ class MarblePoseFromGz(Node):
         self._consume_tf(msg, "fallback")
 
     def _tick_republish(self) -> None:
-        """Re-publica a última pose com o stamp Gazebo (não avançar /clock).
+        """Re-publica a última pose com o stamp do clock atual.
 
-        Avançar o stamp a cada 20 Hz sem nova pose do Gazebo faz o RViz
-        interpolar/extrapolar no tempo de simulação mais depressa que o modelo 3D.
+        Usar o stamp do Gazebo faz o TF ficar stale durante pausas do lock_step
+        (Gazebo pausa à espera do ArduPilot): o stamp envelhece, o TF expira e
+        o RViz salta para a origem do frame pai. Com o stamp do clock atual o TF
+        é sempre considerado "fresco" pelo tf2, independentemente de pausas de sim.
         """
         with self._gz_lock:
             geom = self._last_geom
-            stamp = self._last_source_stamp
         if geom is None:
             return
-        if stamp is None or _stamp_is_zero(stamp):
-            stamp = self.get_clock().now().to_msg()
+        stamp = self.get_clock().now().to_msg()
         self._publish(geom, stamp)
 
 

@@ -56,11 +56,15 @@ BRIDGE_YAML="$(ros2 pkg prefix forest_sim_bridge 2>/dev/null)/share/forest_sim_b
 LOGDIR="$(mktemp -d "${FOREST_STATE_DIR:-/tmp}/fsmfly.XXXXXX")"
 PIDS=()
 cleanup() {
-  [[ "$KEEP" == "true" ]] && { echo "[--keep] logs: $LOGDIR"; return; }
+  echo "[cleanup] a terminar processos…"
   for p in "${PIDS[@]:-}"; do [[ -n "$p" ]] && kill "$p" 2>/dev/null || true; done
-  pkill -9 -x arducopter 2>/dev/null || true
-  pkill -9 -f 'sim[_]vehicle' 2>/dev/null || true
-  pkill -9 -f 'gz[ ]sim' 2>/dev/null || true
+  pkill -TERM -x arducopter 2>/dev/null || true
+  pkill -TERM -f 'sim[_]vehicle' 2>/dev/null || true
+  sleep 1
+  pkill -KILL -x arducopter 2>/dev/null || true
+  pkill -KILL -f 'sim[_]vehicle' 2>/dev/null || true
+  fuser -k 5760/tcp 2>/dev/null || true
+  pkill -KILL -f 'gz[ ]sim' 2>/dev/null || true
   sleep 1
 }
 trap cleanup EXIT

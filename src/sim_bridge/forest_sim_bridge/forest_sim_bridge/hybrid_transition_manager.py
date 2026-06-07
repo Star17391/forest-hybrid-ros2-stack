@@ -23,7 +23,7 @@ from geometry_msgs.msg import PoseStamped, Twist
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool, Float64, String
+from std_msgs.msg import Float64, String
 from tf2_msgs.msg import TFMessage
 
 
@@ -59,20 +59,17 @@ class HybridTransitionManager(Node):
         self.declare_parameter("left_track_yaw_aerial_rad", math.pi / 2.0)
         self.declare_parameter("right_track_yaw_aerial_rad", -math.pi / 2.0)
         self.declare_parameter("rotate_tracks_for_aerial", True)
-        self.declare_parameter("use_stock_multicopter_lee", False)
         self.declare_parameter("track_yaw_tolerance_rad", 0.06)
         self.declare_parameter("lock_duration_sec", 0.8)
         self.declare_parameter("rotation_timeout_sec", 25.0)
         self.declare_parameter("legs_timeout_sec", 20.0)
         self.declare_parameter("leg_extension_retracted_m", 0.0)
         self.declare_parameter("leg_extension_deployed_m", 0.17)
-        self.declare_parameter("leg_extension_aerial_m", 0.0)
         self.declare_parameter("leg_extension_tolerance_m", 0.008)
         self.declare_parameter("min_leg_extend_sec", 0.0)
         self.declare_parameter("min_tracks_rotate_sec", 0.0)
         self.declare_parameter("min_aerial_ready_sec", 0.0)
         self.declare_parameter("disable_leg_commands", False)
-        self.declare_parameter("fly_up_velocity_z", 0.35)
         self.declare_parameter("airborne_z_threshold_m", 0.55)
         self.declare_parameter("spawn_z_m", 0.35)
         self.declare_parameter("model_frame", "marble_hd2/base_link")
@@ -81,7 +78,6 @@ class HybridTransitionManager(Node):
         self.declare_parameter("use_pose_fallback", False)
 
         self._rotate_tracks_aerial = self.get_parameter("rotate_tracks_for_aerial").value
-        self._use_stock_lee = self.get_parameter("use_stock_multicopter_lee").value
         self._left_yaw_aerial = self.get_parameter("left_track_yaw_aerial_rad").value
         self._right_yaw_aerial = self.get_parameter("right_track_yaw_aerial_rad").value
         self._yaw_tol = self.get_parameter("track_yaw_tolerance_rad").value
@@ -90,7 +86,6 @@ class HybridTransitionManager(Node):
         self._legs_timeout = self.get_parameter("legs_timeout_sec").value
         self._leg_retracted = self.get_parameter("leg_extension_retracted_m").value
         self._leg_deployed = self.get_parameter("leg_extension_deployed_m").value
-        self._leg_aerial = self.get_parameter("leg_extension_aerial_m").value
         self._leg_tol = self.get_parameter("leg_extension_tolerance_m").value
         self._min_leg_extend_sec = max(
             0.0, float(self.get_parameter("min_leg_extend_sec").value)
@@ -104,7 +99,6 @@ class HybridTransitionManager(Node):
         self._disable_leg_commands = bool(
             self.get_parameter("disable_leg_commands").value
         )
-        self._fly_vz = self.get_parameter("fly_up_velocity_z").value
         self._airborne_z = self.get_parameter("airborne_z_threshold_m").value
         self._spawn_z = self.get_parameter("spawn_z_m").value
         self._model_frame = self.get_parameter("model_frame").value
@@ -119,14 +113,10 @@ class HybridTransitionManager(Node):
         self._leg_ext = 0.0
         self._leg_positions: list[float] = []
         self._base_z = self._spawn_z
-        self._mc_enabled = False
         self._state_entered = time.monotonic()
         self._returning_to_ground = False
         self._js_seen = False
         self._pose_fallback_warned = False
-        self._aerial_nav_cmd: Twist | None = None
-        self._aerial_nav_time = 0.0
-        self.declare_parameter("aerial_nav_cmd_timeout_sec", 0.5)
 
         qos = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE)
         self._pub_status = self.create_publisher(
@@ -136,12 +126,6 @@ class HybridTransitionManager(Node):
             OperationMode, "/system/locomotion_mode", QoSProfile(depth=1)
         )
         self._pub_cmd_vel = self.create_publisher(Twist, "/forest_gen/cmd_vel", 10)
-        self._pub_aerial = self.create_publisher(
-            Twist, "/forest_gen/hybrid/aerial_cmd_vel", 10
-        )
-        self._pub_enable = self.create_publisher(
-            Bool, "/forest_gen/hybrid/multicopter_enable", 10
-        )
         self._pub_left_yaw = self.create_publisher(
             Float64, "/forest_gen/hybrid/left_track_yaw_cmd", 10
         )
@@ -161,9 +145,6 @@ class HybridTransitionManager(Node):
 
         self.create_subscription(
             String, "/forest_gen/hybrid/transition_request", self._on_request, 10
-        )
-        self.create_subscription(
-            Twist, "/forest_gen/hybrid/aerial_nav_cmd", self._on_aerial_nav_cmd, 10
         )
         self.create_subscription(JointState, "/forest_gen/hybrid/joint_states", self._on_js, 10)
         self.create_subscription(
@@ -189,25 +170,6 @@ class HybridTransitionManager(Node):
             f"leg_cmds={'off' if self._disable_leg_commands else 'on'}"
         )
 
-    def _on_aerial_nav_cmd(self, msg: Twist) -> None:
-        self._aerial_nav_cmd = msg
-        self._aerial_nav_time = time.monotonic()
-
-    def _aerial_nav_active(self) -> bool:
-        if self._aerial_nav_cmd is None:
-            return False
-        timeout = self.get_parameter("aerial_nav_cmd_timeout_sec").value
-        return (time.monotonic() - self._aerial_nav_time) <= timeout
-
-    def _publish_aerial_nav_or_default(
-        self, default_vx: float, default_vy: float, default_vz: float
-    ) -> None:
-        if self._aerial_nav_active() and self._aerial_nav_cmd is not None:
-            c = self._aerial_nav_cmd
-            self._publish_aerial_twist(c.linear.x, c.linear.y, c.linear.z)
-            return
-        self._publish_aerial_twist(default_vx, default_vy, default_vz)
-
     def _on_request(self, msg: String) -> None:
         cmd = msg.data.strip().lower()
         if cmd == "to_aerial":
@@ -227,8 +189,6 @@ class HybridTransitionManager(Node):
         if self._state == State.GROUND_DRIVE:
             return
         self._returning_to_ground = True
-        self._set_multicopter(False)
-        self._publish_aerial_twist(0.0, 0.0, 0.0)
         if self._tracks_at_target(0.0, 0.0):
             self._enter(State.LEGS_RETRACTING, detail)
         else:
@@ -357,19 +317,6 @@ class HybridTransitionManager(Node):
         for pub in self._pub_legs:
             pub.publish(m)
 
-    def _set_multicopter(self, on: bool) -> None:
-        self._mc_enabled = on and self._use_stock_lee
-        b = Bool()
-        b.data = self._mc_enabled
-        self._pub_enable.publish(b)
-
-    def _publish_aerial_twist(self, vx: float, vy: float, vz: float) -> None:
-        t = Twist()
-        t.linear.x = vx
-        t.linear.y = vy
-        t.linear.z = vz
-        self._pub_aerial.publish(t)
-
     def _legs_deployed_states(self) -> bool:
         if self._state == State.LEGS_RETRACTING:
             return False
@@ -382,11 +329,10 @@ class HybridTransitionManager(Node):
         )
 
     def _leg_extension_cmd(self) -> float:
-        # Keep legs deployed through the climb; retract only once stably hovering.
-        # Retracting at AERIAL_FLY entry (before motors finish spinning up) drops the
-        # chassis onto the already-rotated tracks — the observed "queda ao rodar".
-        if self._state == State.AERIAL_HOVER:
-            return self._leg_aerial
+        # As pernas ficam estendidas durante TODO o voo (servem de trem de aterragem):
+        # estendem antes de rodar as lagartas, mantêm-se no hover e na descida, e só
+        # retraem em LEGS_RETRACTING — depois de pousar e com as lagartas já a 0°.
+        # Retrair em voo faria o robô pousar sobre o chassis/lagartas (sem suporte).
         if self._legs_deployed_states():
             return self._leg_deployed
         return self._leg_retracted
@@ -470,10 +416,9 @@ class HybridTransitionManager(Node):
             tracks_ready = self._js_seen and self._tracks_at_target(left_tgt, right_tgt)
             if tracks_ready and self._elapsed() >= self._min_tracks_rotate_sec:
                 if self._returning_to_ground:
-                    self._set_multicopter(False)
                     self._enter(State.LEGS_RETRACTING, "retract support legs")
                 else:
-                    self._enter(State.AERIAL_READY, "tracks at commanded yaw (legacy aerial roll)")
+                    self._enter(State.AERIAL_READY, "tracks rotated to aerial (±90°)")
             elif self._elapsed() > self._rot_timeout:
                 self._enter(
                     State.FAILED,
@@ -498,30 +443,21 @@ class HybridTransitionManager(Node):
             self._zero_ground_cmd()
             if self._elapsed() < self._min_aerial_ready_sec:
                 return
-            self._set_multicopter(True)
+            # Pronto a voar: o ArduPilot (via hybrid_hop_executor) arma e descola.
             self._publish_mode_aerial()
-            detail = (
-                "aerial fly (ROS motor controller)"
-                if not self._use_stock_lee
-                else "multicopter Lee enabled"
-            )
-            self._enter(State.AERIAL_FLY, detail)
+            self._enter(State.AERIAL_FLY, "aerial mode (ArduPilot controla o voo)")
 
         elif self._state == State.AERIAL_FLY:
+            # O FSM apenas observa a subida (pose); a propulsão é do ArduPilot.
             self._zero_ground_cmd()
-            self._set_multicopter(True)
-            self._publish_aerial_nav_or_default(0.0, 0.0, self._fly_vz)
-            if self._base_z >= self._airborne_z and not self._aerial_nav_active():
+            if self._base_z >= self._airborne_z:
                 self._enter(State.AERIAL_HOVER, "airborne")
 
         elif self._state == State.AERIAL_HOVER:
             self._zero_ground_cmd()
-            self._set_multicopter(True)
-            self._publish_aerial_nav_or_default(0.0, 0.0, 0.0)
 
         elif self._state == State.FAILED:
             self._zero_ground_cmd()
-            self._set_multicopter(False)
 
         self._publish_status(left_tgt, right_tgt, leg_tgt)
 
@@ -534,7 +470,8 @@ class HybridTransitionManager(Node):
         s.right_track_yaw_rad = self._right_yaw
         s.leg_extension_m = self._leg_ext
         s.base_z_m = self._base_z
-        s.multicopter_enabled = self._mc_enabled
+        # Sem controlador multicopter ROS: a propulsão aérea é toda do ArduPilot.
+        s.multicopter_enabled = False
         s.airborne = self._base_z >= self._airborne_z
         self._pub_status.publish(s)
 

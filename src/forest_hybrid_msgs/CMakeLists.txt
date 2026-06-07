@@ -10,6 +10,8 @@ set(msg_files
   "msg/MissionStatus.msg"
   "msg/OperationMode.msg"
   "msg/HybridTransitionStatus.msg"
+  "msg/HybridHopRequest.msg"
+  "msg/HybridHopStatus.msg"
   "msg/SemanticClass.msg"
 )
 

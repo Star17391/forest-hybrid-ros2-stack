@@ -483,19 +483,6 @@ def _opaque_setup(context, *_args, **_kwargs):
             parameters=[use_sim, _hybrid_transition_params()],
         )
 
-    hybrid_aerial_motor = None
-    if use_hybrid_transition or use_hybrid_robot:
-        hybrid_aerial_motor = Node(
-            package="forest_sim_bridge",
-            executable="hybrid_aerial_motor_controller",
-            name="hybrid_aerial_motor_controller",
-            output="screen",
-            parameters=[
-                use_sim,
-                {"mass_kg": 5.84, "motor_constant": 1.25e-4, "spin_up_sec": 2.5},
-            ],
-        )
-
     # RViz must start after Gazebo publishes /clock — early start crashes Ogre (no GL buffers).
     main_actions = [
         bridge,
@@ -503,8 +490,6 @@ def _opaque_setup(context, *_args, **_kwargs):
     ]
     if hybrid_transition is not None:
         main_actions.append(hybrid_transition)
-    if hybrid_aerial_motor is not None:
-        main_actions.append(hybrid_aerial_motor)
     if map_odom_early is not None:
         main_actions.append(map_odom_early)
     if lidar_tf_early is not None:
