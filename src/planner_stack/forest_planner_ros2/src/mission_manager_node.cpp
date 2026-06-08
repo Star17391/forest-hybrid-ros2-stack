@@ -5,6 +5,8 @@
 #include <optional>
 #include <string>
 
+#include "forest_hybrid_msgs/msg/hybrid_hop_request.hpp"
+#include "forest_hybrid_msgs/msg/hybrid_hop_status.hpp"
 #include "forest_hybrid_msgs/msg/mission_ack.hpp"
 #include "forest_hybrid_msgs/msg/mission_command.hpp"
 #include "forest_hybrid_msgs/msg/mission_status.hpp"
@@ -72,6 +74,7 @@ public:
     declare_parameter<double>("goal_tolerance_m", 0.5);
     declare_parameter<double>("goal_tolerance_heading_deg", 25.0);
     declare_parameter<bool>("allow_auto_aerial_on_block", false);
+    declare_parameter<double>("hop_cruise_alt_m", 3.0);
     declare_parameter<std::string>("pose_topic", "/state/pose_fused");
     declare_parameter<bool>("allow_goal_reached_topic_shortcut", true);
 
@@ -80,6 +83,7 @@ public:
     const double heading_deg = std::max(0.1, get_parameter("goal_tolerance_heading_deg").as_double());
     goal_tolerance_heading_rad_ = heading_deg * kPi / 180.0;
     allow_auto_aerial_on_block_ = get_parameter("allow_auto_aerial_on_block").as_bool();
+    hop_cruise_alt_m_ = get_parameter("hop_cruise_alt_m").as_double();
     pose_topic_ = get_parameter("pose_topic").as_string();
     allow_goal_reached_shortcut_ = get_parameter("allow_goal_reached_topic_shortcut").as_bool();
 
@@ -98,6 +102,9 @@ public:
     reached_sub_ = create_subscription<std_msgs::msg::Bool>(
       "/planning/goal_reached", rclcpp::QoS(10),
       std::bind(&MissionManagerNode::on_goal_reached, this, std::placeholders::_1));
+    hop_status_sub_ = create_subscription<forest_hybrid_msgs::msg::HybridHopStatus>(
+      "/forest_gen/hybrid/hop_status", rclcpp::QoS(10),
+      std::bind(&MissionManagerNode::on_hop_status, this, std::placeholders::_1));
 
     pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
       pose_topic_, rclcpp::QoS(10),
@@ -110,6 +117,8 @@ public:
     route_pub_ = create_publisher<nav_msgs::msg::Path>(
       "/planning/mission_route",
       rclcpp::QoS(1).transient_local().reliable());
+    hop_request_pub_ = create_publisher<forest_hybrid_msgs::msg::HybridHopRequest>(
+      "/forest_gen/hybrid/hop_request", rclcpp::QoS(10));
 
     tick_timer_ = create_wall_timer(
       std::chrono::milliseconds(200), std::bind(&MissionManagerNode::on_tick, this));
@@ -216,6 +225,7 @@ private:
     active_mission_ = mission;
     waiting_return_home_ack_ = false;
     waiting_aerial_permission_ = false;
+    hop_in_progress_ = false;
     last_published_goal_key_.clear();
     force_goal_republish_ = false;
     active_map_goal_.reset();
@@ -479,6 +489,62 @@ private:
       "Ground path blocked. Send /mission/ack approved=true to allow aerial mode.");
   }
 
+  // Dispara o "salto aéreo" no hybrid_hop_executor e espera o HybridHopStatus DONE.
+  // Ponto de aterragem = goal de solo atual. Sem perceção/costmap, salta diretamente
+  // para o destino; quando houver LiDAR 3D, calcular aqui um ponto seguro intermédio.
+  void trigger_aerial_hop()
+  {
+    if (hop_in_progress_) {
+      return;
+    }
+    double mx = 0.0;
+    double my = 0.0;
+    double mz = 0.0;
+    std::string detail;
+    if (!build_map_goal(&mx, &my, &mz, detail)) {
+      fail_active_and_hold("aerial hop: sem goal válido para aterrar (" + detail + ")");
+      return;
+    }
+    hop_in_progress_ = true;
+    hop_command_id_ = "mm_hop_" + std::to_string(++hop_counter_);
+
+    forest_hybrid_msgs::msg::HybridHopRequest req;
+    req.command_id = hop_command_id_;
+    req.source = "mission_manager";
+    req.land_x = mx;
+    req.land_y = my;
+    req.cruise_alt_m = hop_cruise_alt_m_;
+    hop_request_pub_->publish(req);
+
+    RCLCPP_INFO(
+      get_logger(), "Salto aéreo pedido (id=%s): aterrar em (%.2f, %.2f) alt=%.2f m",
+      hop_command_id_.c_str(), mx, my, hop_cruise_alt_m_);
+    publish_status(
+      forest_hybrid_msgs::msg::MissionStatus::STATE_EXECUTING,
+      "aerial hop in progress (id=" + hop_command_id_ + ")");
+  }
+
+  void on_hop_status(const forest_hybrid_msgs::msg::HybridHopStatus::SharedPtr msg)
+  {
+    if (!hop_in_progress_ || msg->command_id != hop_command_id_) {
+      return;
+    }
+    using S = forest_hybrid_msgs::msg::HybridHopStatus;
+    if (msg->state == S::STATE_DONE) {
+      hop_in_progress_ = false;
+      RCLCPP_INFO(
+        get_logger(), "Salto aéreo concluído (id=%s) — a re-planear do novo ponto",
+        hop_command_id_.c_str());
+      // Retoma: republicar o goal força o controller a traçar caminho desde a nova pose.
+      last_published_goal_key_.clear();
+      force_goal_republish_ = true;
+      execute_active_command();
+    } else if (msg->state == S::STATE_FAILED) {
+      hop_in_progress_ = false;
+      fail_active_and_hold("aerial hop failed: " + msg->detail);
+    }
+  }
+
   void on_command(const forest_hybrid_msgs::msg::MissionCommand::SharedPtr msg)
   {
     using C = forest_hybrid_msgs::msg::MissionCommand;
@@ -544,9 +610,9 @@ private:
       return;
     }
     if (waiting_aerial_permission_) {
+      // Autorização concedida: dispara o salto aéreo (em vez de re-tentar o solo).
       waiting_aerial_permission_ = false;
-      last_published_goal_key_.clear();
-      execute_active_command();
+      trigger_aerial_hop();
     }
   }
 
@@ -561,7 +627,9 @@ private:
 
   void on_goal_reached(const std_msgs::msg::Bool::SharedPtr msg)
   {
-    if (!allow_goal_reached_shortcut_ || !active_mission_.has_value() || !msg->data) {
+    if (!allow_goal_reached_shortcut_ || !active_mission_.has_value() || !msg->data ||
+      hop_in_progress_)
+    {
       return;
     }
     advance_after_goal_reached("goal_reached topic shortcut");
@@ -626,7 +694,7 @@ private:
     const auto t = active_mission_->command.command_type;
     if (
       t == C::CMD_HOLD || t == C::CMD_EMERGENCY_STOP || waiting_return_home_ack_ ||
-      waiting_aerial_permission_)
+      waiting_aerial_permission_ || hop_in_progress_)
     {
       return;
     }
@@ -653,7 +721,7 @@ private:
     const auto type = active_mission_->command.command_type;
     if (
       type == C::CMD_HOLD || type == C::CMD_EMERGENCY_STOP ||
-      waiting_return_home_ack_ || waiting_aerial_permission_)
+      waiting_return_home_ack_ || waiting_aerial_permission_ || hop_in_progress_)
     {
       return;
     }
@@ -670,9 +738,11 @@ private:
     }
 
     if (allow_auto_aerial_on_block_) {
-      execute_active_command();
+      // Modo automático: salta sem pedir autorização.
+      trigger_aerial_hop();
       return;
     }
+    // Modo seguro: pede autorização ao operador (/mission/ack approved=true).
     request_aerial_permission();
   }
 
@@ -721,6 +791,10 @@ private:
   bool waiting_aerial_permission_{false};
   bool force_goal_republish_{false};
   bool allow_goal_reached_shortcut_{false};
+  bool hop_in_progress_{false};
+  double hop_cruise_alt_m_{3.0};
+  std::string hop_command_id_;
+  uint64_t hop_counter_{0};
   std::string pose_topic_;
   std::string last_published_goal_key_;
   std::string current_detail_;
@@ -738,10 +812,12 @@ private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr blocked_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr reached_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_sub_;
+  rclcpp::Subscription<forest_hybrid_msgs::msg::HybridHopStatus>::SharedPtr hop_status_sub_;
 
   rclcpp::Publisher<forest_hybrid_msgs::msg::MissionStatus>::SharedPtr status_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr goal_pub_;
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr route_pub_;
+  rclcpp::Publisher<forest_hybrid_msgs::msg::HybridHopRequest>::SharedPtr hop_request_pub_;
   rclcpp::TimerBase::SharedPtr tick_timer_;
 };
 
