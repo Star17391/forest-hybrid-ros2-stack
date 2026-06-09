@@ -17,10 +17,13 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
 
-def _rviz_config_for_mode(lidar_mode: str) -> str:
+def _rviz_config_for_mode(lidar_mode: str, use_experimental_lidar3d: str) -> str:
     hybrid_share = get_package_share_directory("forest_hybrid_conf")
     mode = lidar_mode.strip().lower()
+    exp = use_experimental_lidar3d.strip().lower() in ("1", "true", "yes")
     if mode in ("3d", "lidar3d", "airy"):
+        if exp:
+            return os.path.join(hybrid_share, "config", "forest_mvp_sim_lidar3d_experimental.rviz")
         return os.path.join(hybrid_share, "config", "forest_mvp_sim_lidar3d.rviz")
     return os.path.join(hybrid_share, "config", "forest_mvp_sim.rviz")
 
@@ -30,7 +33,8 @@ def _setup(context, *_args, **_kwargs):
     sim_bridge_share = get_package_share_directory("forest_sim_bridge")
 
     lidar_mode = LaunchConfiguration("lidar_mode").perform(context)
-    rviz_cfg = _rviz_config_for_mode(lidar_mode)
+    use_experimental = LaunchConfiguration("use_experimental_lidar3d").perform(context)
+    rviz_cfg = _rviz_config_for_mode(lidar_mode, use_experimental)
 
     sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -53,6 +57,8 @@ def _setup(context, *_args, **_kwargs):
             "publish_map_odom_identity": "true",
             "slam_scan_topic": LaunchConfiguration("slam_scan_topic"),
             "lidar_mode": LaunchConfiguration("lidar_mode"),
+            "use_experimental_lidar3d": LaunchConfiguration("use_experimental_lidar3d"),
+            "use_legacy_lidar3d": LaunchConfiguration("use_legacy_lidar3d"),
         }.items(),
     )
 
@@ -86,6 +92,16 @@ def generate_launch_description() -> LaunchDescription:
                 description="2d | 3d (via forest up --lidar2d / --lidar3d)",
             ),
             DeclareLaunchArgument("use_slam", default_value="true"),
+            DeclareLaunchArgument(
+                "use_experimental_lidar3d",
+                default_value="false",
+                description="Start lidar3d_experimental_node (CSF pipeline)",
+            ),
+            DeclareLaunchArgument(
+                "use_legacy_lidar3d",
+                default_value="true",
+                description="Start legacy lidar3d_segmentation_node",
+            ),
             OpaqueFunction(function=_setup),
         ]
     )
