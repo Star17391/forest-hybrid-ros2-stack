@@ -12,25 +12,37 @@ from launch_ros.actions import Node
 
 def generate_launch_description() -> LaunchDescription:
     forest_pkg = get_package_share_directory("forest_nicla_vision_ros2")
+    semantic_share = get_package_share_directory("forest_semantic_segmentation")
+    default_onnx = os.path.join(semantic_share, "models", "forest_semantic.onnx")
     onnx_path = LaunchConfiguration("onnx_model_path")
 
     return LaunchDescription(
         [
-            DeclareLaunchArgument(
-                "onnx_model_path",
-                description="Path to ONNX model for forest_semantic_segmentation",
-            ),
+            DeclareLaunchArgument("onnx_model_path", default_value=default_onnx),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(forest_pkg, "launch", "nicla_vision_advr.launch.py")
                 ),
             ),
             Node(
+                package="forest_robot_supervisor",
+                executable="operation_mode_node",
+                name="operation_mode_node",
+                output="screen",
+                parameters=[{"operation_mode": "ground"}],
+            ),
+            Node(
                 package="forest_semantic_segmentation",
                 executable="semantic_segmentation_node",
                 name="semantic_segmentation",
                 output="screen",
-                parameters=[{"onnx_model_path": onnx_path}],
+                parameters=[
+                    {
+                        "onnx_model_path": onnx_path,
+                        "model_input_width": 768,
+                        "model_input_height": 512,
+                    }
+                ],
             ),
         ]
     )
