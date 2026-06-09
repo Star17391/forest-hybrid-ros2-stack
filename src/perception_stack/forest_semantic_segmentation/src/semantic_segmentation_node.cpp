@@ -1,5 +1,6 @@
 #include <atomic>
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -21,8 +22,8 @@ public:
   SemanticSegmentationNode() : Node("semantic_segmentation_node")
   {
     declare_parameter<std::string>("onnx_model_path", "");
-    declare_parameter<int>("model_input_width", 512);
-    declare_parameter<int>("model_input_height", 384);
+    declare_parameter<int>("model_input_width", 768);
+    declare_parameter<int>("model_input_height", 512);
     declare_parameter<bool>("rgb_input", true);
     declare_parameter<double>("min_logit_margin", 0.0);
 
@@ -42,6 +43,8 @@ public:
       [this](const sensor_msgs::msg::Image::SharedPtr msg) { on_image(msg); });
     pub_ = create_publisher<sensor_msgs::msg::Image>(
       "/perception/semantic_mask", rclcpp::SensorDataQoS());
+    pub_color_ = create_publisher<sensor_msgs::msg::Image>(
+      "/perception/semantic_mask_color", rclcpp::SensorDataQoS());
   }
 
 private:
@@ -73,6 +76,47 @@ private:
   void on_mode(const forest_hybrid_msgs::msg::OperationMode::SharedPtr msg)
   {
     aerial_.store(msg->mode == forest_hybrid_msgs::msg::OperationMode::MODE_AERIAL);
+  }
+
+  static cv::Vec3b class_color_bgr(uint8_t class_id)
+  {
+    static const std::vector<cv::Vec3b> palette = {
+      cv::Vec3b(40, 40, 40),       // 0 void
+      cv::Vec3b(120, 180, 220),    // 1 sky
+      cv::Vec3b(60, 180, 80),      // 2 grass
+      cv::Vec3b(160, 120, 80),     // 3 dirt_mud
+      cv::Vec3b(30, 80, 30),       // 4 tree
+      cv::Vec3b(60, 200, 60),      // 5 vegetation
+      cv::Vec3b(60, 60, 220),      // 6 obstacle
+      cv::Vec3b(180, 180, 180),    // 7 pavement
+    };
+    const size_t idx = (class_id < palette.size()) ? class_id : 0;
+    return palette[idx];
+  }
+
+  sensor_msgs::msg::Image mask_to_color_image(const sensor_msgs::msg::Image & mask_msg) const
+  {
+    cv::Mat mask(static_cast<int>(mask_msg.height), static_cast<int>(mask_msg.width), CV_8UC1);
+    if (mask_msg.data.size() >= static_cast<size_t>(mask.rows * mask.cols)) {
+      std::memcpy(mask.data, mask_msg.data.data(), static_cast<size_t>(mask.rows * mask.cols));
+    }
+    cv::Mat bgr(mask.rows, mask.cols, CV_8UC3);
+    for (int y = 0; y < mask.rows; ++y) {
+      for (int x = 0; x < mask.cols; ++x) {
+        bgr.at<cv::Vec3b>(y, x) = class_color_bgr(mask.at<uint8_t>(y, x));
+      }
+    }
+    cv::Mat rgb;
+    cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
+    sensor_msgs::msg::Image out;
+    out.header = mask_msg.header;
+    out.height = mask_msg.height;
+    out.width = mask_msg.width;
+    out.encoding = "rgb8";
+    out.is_bigendian = mask_msg.is_bigendian;
+    out.step = static_cast<uint32_t>(mask_msg.width * 3u);
+    out.data.assign(rgb.data, rgb.data + (rgb.rows * rgb.cols * 3));
+    return out;
   }
 
   sensor_msgs::msg::Image create_empty_mask(const sensor_msgs::msg::Image & src) const
@@ -198,18 +242,20 @@ private:
       out = create_empty_mask(*msg);
     }
     pub_->publish(out);
+    pub_color_->publish(mask_to_color_image(out));
   }
 
   std::atomic<bool> aerial_{false};
   bool model_loaded_{false};
   bool rgb_input_{true};
-  int model_input_width_{512};
-  int model_input_height_{384};
+  int model_input_width_{768};
+  int model_input_height_{512};
   float min_logit_margin_{0.0F};
   cv::dnn::Net net_;
   rclcpp::Subscription<forest_hybrid_msgs::msg::OperationMode>::SharedPtr mode_sub_;
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_;
+  rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_color_;
 };
 
 }  // namespace forest_semantic_segmentation

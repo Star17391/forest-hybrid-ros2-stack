@@ -1,0 +1,10 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /TF1
+        - /Camera RGB1
+        - /Semantic mask (color)1
+      Splitter Ratio: 0.5

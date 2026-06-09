@@ -15,4 +15,7 @@ target_compile_features(semantic_segmentation_node PUBLIC cxx_std_17)
 
 install(TARGETS semantic_segmentation_node DESTINATION lib/${PROJECT_NAME})
 
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(FILES models/forest_semantic.onnx DESTINATION share/${PROJECT_NAME}/models)
+
 ament_package()
