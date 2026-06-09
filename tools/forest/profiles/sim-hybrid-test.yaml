@@ -17,5 +17,4 @@ layers:
 
 wait_nodes:
   - hybrid_transition_manager
-  - hybrid_aerial_motor_controller
   - marble_pose_from_gz

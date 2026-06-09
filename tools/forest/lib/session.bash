@@ -131,6 +131,8 @@ PY
 forest_session_down_unlocked() {
   local do_verify="${1:-true}"
 
+  forest_sitl_kill
+
   if ! forest_session_active; then
     forest_log_section "No session state — running cleanup only"
     forest_source_ros || true
@@ -195,6 +197,9 @@ forest_session_up_profile() {
     forest_session_status
     return 1
   fi
+
+  # Garante que o ArduPilot de uma sessão anterior não está a bloquear portas.
+  forest_sitl_kill
 
   forest_session_acquire_lock || return 1
   trap 'forest_session_release_lock' EXIT

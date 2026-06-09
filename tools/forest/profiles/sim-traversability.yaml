@@ -1,0 +1,35 @@
+api_version: forest.dev/v1
+name: sim-traversability
+description: Sim MVP + EKF + LiDAR 3D experimental (CSF + clusters) + camada de mapa de custo / traversabilidade 2.5D (grid_map em odom). Sprint 0+.
+
+lifecycle:
+  pre_start: cleanup_hybrid
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_hybrid_conf
+    launch: sim_mvp_slam.launch.py
+    args:
+      world: mvp_empty_flat.sdf
+      use_rviz: true
+      ekf_mode: local
+      paused: false
+      use_slam: false
+      lidar_mode: 3d
+      use_experimental_lidar3d: true
+      use_legacy_lidar3d: false
+  - id: mapping
+    kind: mapping
+    package: forest_traversability_mapping
+    launch: traversability_mapping.launch.py
+    args:
+      use_sim_time: true
+
+wait_nodes:
+  - ekf_filter_node
+  - lidar3d_experimental_node
+  - traversability_mapping_node
+
+ui:
+  launch_hint: "Costmap em /mapping/traversability_costmap (display 'Traversability costmap' no RViz). Sprint 0: grelha vazia que segue o robô."

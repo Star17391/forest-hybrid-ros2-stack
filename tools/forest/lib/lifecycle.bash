@@ -7,6 +7,33 @@ source "$(dirname "${BASH_SOURCE[0]}")/env.bash"
 # shellcheck source=log.bash
 source "$(dirname "${BASH_SOURCE[0]}")/log.bash"
 
+# Kill ArduPilot SITL (arducopter + sim_vehicle.py) if running.
+# Called by forest_session_down and forest_session_up_profile (pre-flight check).
+forest_sitl_kill() {
+  local found=false
+  if pgrep -x arducopter >/dev/null 2>&1; then
+    echo "  [sitl] ArduPilot (arducopter) a correr — a terminar…"
+    pkill -TERM -x arducopter 2>/dev/null || true
+    sleep 1
+    pkill -KILL -x arducopter 2>/dev/null || true
+    found=true
+  fi
+  if pgrep -f 'sim_vehicle\.py' >/dev/null 2>&1; then
+    echo "  [sitl] sim_vehicle.py a correr — a terminar…"
+    pkill -TERM -f 'sim_vehicle\.py' 2>/dev/null || true
+    sleep 1
+    pkill -KILL -f 'sim_vehicle\.py' 2>/dev/null || true
+    found=true
+  fi
+  # Ensure MAVLink port 5760 is free
+  if ss -tlnp 2>/dev/null | grep -q ':5760 '; then
+    echo "  [sitl] Porta 5760 ainda ocupada — SIGKILL no processo…"
+    fuser -k 5760/tcp 2>/dev/null || true
+    sleep 0.5
+  fi
+  [[ "$found" == "true" ]] && echo "  [sitl] ArduPilot terminado." || true
+}
+
 forest_run_cleanup() {
   local extra=()
   if [[ "${1:-}" == "--hybrid" || "${1:-}" == "hybrid" ]]; then

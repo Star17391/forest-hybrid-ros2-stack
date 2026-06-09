@@ -1,0 +1,25 @@
+api_version: forest.dev/v1
+name: sim-lidar3d-experimental
+description: Sim MVP + EKF + 3D LiDAR + pipeline EXPERIMENTAL (CSF + stem-band clustering, sem legacy)
+
+lifecycle:
+  pre_start: cleanup_hybrid
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_hybrid_conf
+    launch: sim_mvp_slam.launch.py
+    args:
+      world: mvp_empty_flat.sdf
+      use_rviz: true
+      ekf_mode: local
+      paused: false
+      use_slam: false
+      lidar_mode: 3d
+      use_experimental_lidar3d: true
+      use_legacy_lidar3d: false
+
+wait_nodes:
+  - ekf_filter_node
+  - lidar3d_experimental_node
