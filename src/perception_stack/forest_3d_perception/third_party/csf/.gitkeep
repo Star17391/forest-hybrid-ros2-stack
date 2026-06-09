@@ -1,0 +1,2 @@
+# Run: bash scripts/fetch_csf_vendor.sh
+# Or let CMake FetchContent download CSF at build time.

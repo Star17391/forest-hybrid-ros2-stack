@@ -1,0 +1,119 @@
+# Experimental LiDAR pipeline (parallel to legacy lidar3d_segmentation_node).
+# Stage 0 (CSF): ground/non_ground | Stage 1 (stem band): nDSM band + 2D clustering → clusters
+
+lidar3d_experimental_node:
+  ros__parameters:
+    enabled: true
+    # debug_stage: 0=full 1=voxel_only 2=csf_only 3=cluster_only_3d (CSF bypass)
+    debug_stage: 0
+    debug_publish_stages: true
+    debug_log_interval: 30
+
+    input_topic: /sensors/lidar/points
+    processing_frame: marble_hd2/base_link
+    tf_timeout_sec: 0.5
+
+    voxel_leaf_size_m: 0.08
+    min_range_m: 0.3
+    max_range_m: 15.0
+    min_z_m: -1.0
+    max_z_m: 5.0
+
+    ground_topic: /perception/lidar3d/experimental/ground
+    non_ground_topic: /perception/lidar3d/experimental/non_ground
+    stem_band_topic: /perception/lidar3d/experimental/stem_band
+    clusters_topic: /perception/lidar3d/experimental/clusters
+    cluster_markers_topic: /perception/lidar3d/experimental/cluster_markers
+    debug_stats_topic: /perception/lidar3d/experimental/debug_stats
+
+    csf:
+      cloth_resolution: 0.5
+      rigidness: 3
+      iterations: 500
+      class_threshold: 0.40   # (A) ligeiro: estreita banda de solo p/ pedras
+      time_step: 0.65
+      slope_smooth: true
+
+    # Euclidean 3D clustering — only used in debug_stage=3 (cluster-only, CSF bypass).
+    clustering:
+      tolerance: 0.25
+      min_cluster_size: 10
+      max_cluster_size: 5000
+
+    # Stem-band 2D clustering (the real method):
+    #   ground reference (CSF) → nDSM height of non-ground → keep band [band_min,band_max]
+    #   → 2D XY Euclidean clustering. Each trunk becomes a compact separate cluster.
+    stem:
+      ground_grid_resolution_m: 0.20
+      band_min_m: 0.30        # bottom of trunk band above ground
+      band_max_m: 3.00        # top of trunk band (drops canopy that glues trees)
+      cluster_tolerance_m: 0.20
+      cluster_min_pts: 6
+      cluster_max_pts: 3000
+
+    # (B) Pós-passo: recupera pedras caídas que o CSF absorveu como solo.
+    #   DEM robusto (percentil baixo, janela window_m) → ponto de "solo" acima
+    #   do terreno por > height_threshold_m é reclassificado como non_ground.
+    csf_post:
+      enabled: true
+      cell_m: 0.20
+      window_m: 1.00
+      percentile: 0.15
+      height_threshold_m: 0.12   # ↑ menos sensível (só pedras maiores) / ↓ mais sensível
+      min_points_per_cell: 2
+
+    # (S3.5 — Opção 2, ATIVA) Region growing ancorado no solo: calcula altura
+    #   acima do solo (HAG) de cada ponto não-solo; SEMENTES = pontos na base
+    #   (HAG <= seed_max_hag); cresce em 3D (raio growth_radius) para cima até
+    #   growth_max_hag. Cada cluster nasce de uma semente no solo → TUDO fica
+    #   ancorado ao chão (rochas e troncos ligam ao solo; copa flutuante é
+    #   EXCLUÍDA) e a árvore NÃO se fragmenta. Tópicos: …/stem_band = candidatos
+    #   (HAG 0..max), …/stem_candidates = pontos que cresceram numa região.
+    region_grow:
+      enabled: true
+      ground_grid_resolution_m: 0.20   # resolução da grelha de solo do CSF
+      ground_inpaint_passes: 6         # preenche buracos do solo (sob troncos) a partir das
+                                       #   vizinhas → HAG disponível em todo o lado. 0 = só observado
+      seed_max_hag_m: 0.70         # ↑ mais recall (CSF come a base do tronco; sementes têm de
+                                   #   ficar acima do class_threshold do CSF) / ↓ mais estrito
+      growth_radius_m: 0.30        # raio de conectividade HORIZONTAL; ↑ une gaps (risco de colar)
+      growth_z_scale: 0.20         # <1 comprime o Z na busca → atravessa GAPS verticais do tronco
+                                   #   (alcance vertical = raio / z_scale = 1.5 m) sem alargar na
+                                   #   horizontal. ↓ mais alcance vertical (tronco cresce inteiro)
+      growth_max_hag_m: 3.00       # não cresce acima disto (salta a copa)
+      ground_tolerance_m: 0.20     # tolera pontos ligeiramente abaixo do solo estimado
+      min_region_pts: 5            # regiões menores = ruído, descartadas
+      max_region_pts: 5000         # regiões maiores = ponte de sub-bosque, descartadas
+
+    # (S3.5) Pré-filtro de linearidade por ponto: PCA local em cada ponto não-solo,
+    #   mantém só estruturas LINEARES (tipo-tronco) e descarta folhagem dispersa de
+    #   arbustos/copa ANTES do clustering. Gate por LINEARIDADE (não verticalidade
+    #   pura) → mantém troncos finos e INCLINADOS; floor suave só corta linear
+    #   horizontal (troncos caídos, linhas de scan). Pontos com poucos vizinhos são
+    #   MANTIDOS (recall-safe p/ troncos finos/distantes). Tópico: …/stem_candidates.
+    #   FUTURO: substituir/complementar com region-growing por continuidade vertical
+    #   a partir do solo (Opção 2) — âncora ao solo rejeita ramos flutuantes da copa.
+    stem_filter:
+      enabled: true
+      neighbor_radius_m: 0.25      # raio da vizinhança p/ PCA local
+      min_neighbors: 5             # abaixo disto mantém o ponto (não consegue julgar)
+      linearity_min: 0.60          # ↑ mais exigente (só linhas finas) / ↓ deixa passar mais
+      verticality_floor: 0.30      # ↓ mantém troncos mais inclinados / ↑ exige mais vertical
+
+    # (S3 — Opção B) Classificação por FATIAS, sem ML. O tronco é detectado pela
+    #   FORMA (núcleo vertical de fatias com secção compacta e contínua), de
+    #   QUALQUER largura — não há limite de largura. A copa é onde a secção alarga
+    #   → fica de fora. Taxonomia: TRUNK / ROCK / SHRUB / OBSTACLE / UNKNOWN
+    #   (só OBSTACLE é o "resto"; SHRUB é positivo). Cores: tronco=azul,
+    #   rocha=vermelho, arbusto=verde, obstáculo=laranja, desconhecido=cinza.
+    classify:
+      slice_height_m: 0.20            # altura de cada fatia horizontal
+      slice_min_pts: 2               # fatias com menos pontos são ignoradas
+      trunk_radius_grow_factor: 2.2  # fatia é "tronco" se raio <= factor*ref + margem
+      trunk_radius_abs_margin_m: 0.10  # folga absoluta (troncos finos toleram ruído)
+      trunk_center_jump_m: 0.30      # desvio XY máx. entre fatias do tronco (permite inclinação)
+      trunk_core_min_height_m: 0.80  # altura mín. do núcleo vertical p/ ser TRUNK
+      rock_max_height_m: 0.60        # ROCK: baixo
+      rock_max_aspect: 1.20          # ROCK: achatado (altura/largura)
+      shrub_max_height_m: 1.50       # até esta altura sem núcleo = SHRUB; acima = OBSTACLE
+      min_points: 4                  # abaixo disto → UNKNOWN

@@ -1,0 +1,7 @@
+# Top-level switch: run legacy only, experimental only, or both (dual pipeline).
+# Used by launch/lidar3d_dual_pipeline.launch.py
+
+/**:
+  ros__parameters:
+    use_experimental_pipeline: false
+    use_legacy_pipeline: true
