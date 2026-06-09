@@ -27,3 +27,11 @@ tools/diagnostics/lidar3d_experimental_overlay.yaml
 
 # Third-party binaries
 tools/third_party/bin/
+
+# Runtime junk / local session artifacts
+logs/
+eeprom.bin
+.claude/
+
+# Large ML model weights (fetched, not versioned)
+src/perception_stack/forest_semantic_segmentation/models/*.onnx
