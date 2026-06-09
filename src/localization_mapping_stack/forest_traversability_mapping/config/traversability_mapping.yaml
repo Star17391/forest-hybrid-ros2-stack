@@ -1,0 +1,17 @@
+traversability_mapping_node:
+  ros__parameters:
+    # Frame da grelha. `odom` permite acumulacao local sem saltos de map->odom.
+    map_frame: odom
+    base_frame: marble_hd2/base_link
+    cost_layer: cost
+
+    # Janela local rolante (segue o robo via move()).
+    size_x_m: 20.0
+    size_y_m: 20.0
+    resolution_m: 0.25
+
+    publish_hz: 5.0
+    tf_timeout_sec: 0.1
+
+    # Valor de custo que mapeia para 100 no OccupancyGrid (custo normalizado 0..1).
+    cost_max: 1.0
