@@ -45,11 +45,10 @@
 #include "forest_3d_perception/cylinder_fit.hpp"
 #include "forest_3d_perception/experimental/cluster_classifier.hpp"
 #include "forest_3d_perception/experimental/columnar_ground_recovery.hpp"
-#include "forest_3d_perception/experimental/experimental_pipeline.hpp"
 #include "forest_3d_perception/experimental/object_on_ground_filter.hpp"
 #include "forest_3d_perception/experimental/pipeline_debug.hpp"
+#include "forest_3d_perception/experimental/sprint1_pipeline.hpp"
 #include "forest_3d_perception/experimental/stem_band_clustering.hpp"
-#include "forest_3d_perception/experimental/stem_point_filter.hpp"
 #include "forest_3d_perception/experimental/stem_region_growing.hpp"
 
 using PointT = pcl::PointXYZ;
@@ -123,21 +122,6 @@ forest_3d_perception::experimental::ColumnarRecoveryParams load_columnar_recover
     static_cast<float>(node.get_parameter("columnar_recovery.floor_percentile").as_double());
   p.max_recover_m =
     static_cast<float>(node.get_parameter("columnar_recovery.max_recover_m").as_double());
-  return p;
-}
-
-forest_3d_perception::experimental::StemPointFilterParams load_stem_filter_params(
-  rclcpp::Node & node)
-{
-  forest_3d_perception::experimental::StemPointFilterParams p;
-  p.enabled = node.get_parameter("stem_filter.enabled").as_bool();
-  p.neighbor_radius_m =
-    static_cast<float>(node.get_parameter("stem_filter.neighbor_radius_m").as_double());
-  p.min_neighbors = node.get_parameter("stem_filter.min_neighbors").as_int();
-  p.linearity_min =
-    static_cast<float>(node.get_parameter("stem_filter.linearity_min").as_double());
-  p.verticality_floor =
-    static_cast<float>(node.get_parameter("stem_filter.verticality_floor").as_double());
   return p;
 }
 
@@ -287,7 +271,7 @@ public:
     tf_listener_(tf_buffer_)
   {
     declare_parameters();
-    pipeline_.apply_params();
+    sprint1_.apply_params();
     stem_clusterer_.params = load_stem_params(*this);
 
     auto qos = rclcpp::SensorDataQoS();
@@ -464,14 +448,6 @@ private:
     declare_parameter<int>("region_grow.min_region_pts", 5);
     declare_parameter<int>("region_grow.max_region_pts", 5000);
 
-    // Sprint 3.5 — Option 1: per-point linearity split (OFF by default; kept for
-    // comparison). Fragments trees, so region growing above supersedes it.
-    declare_parameter<bool>("stem_filter.enabled", true);
-    declare_parameter<double>("stem_filter.neighbor_radius_m", 0.25);
-    declare_parameter<int>("stem_filter.min_neighbors", 5);
-    declare_parameter<double>("stem_filter.linearity_min", 0.60);
-    declare_parameter<double>("stem_filter.verticality_floor", 0.30);
-
     // Sprint 3 (Option B): slice-based classification — TRUNK / ROCK / SHRUB /
     // OBSTACLE. Trunk = vertical stem core (shape, not width); OBSTACLE is the
     // only catch-all.
@@ -560,15 +536,12 @@ private:
 
   void reload_pipeline_params()
   {
-    pipeline_.params.sprint =
-      forest_3d_perception::experimental::PipelineSprint::GroundClustering;
-    pipeline_.params.sprint1.csf = load_csf_params(*this);
-    pipeline_.params.sprint1.clustering = load_clustering_params(*this);
-    pipeline_.apply_params();
+    sprint1_.params.csf = load_csf_params(*this);
+    sprint1_.params.clustering = load_clustering_params(*this);
+    sprint1_.apply_params();
     stem_clusterer_.params = load_stem_params(*this);
     object_filter_.params = load_object_filter_params(*this);
     columnar_recovery_.params = load_columnar_recovery_params(*this);
-    stem_filter_.params = load_stem_filter_params(*this);
     region_grower_.params = load_region_grow_params(*this);
     classifier_.params = load_classify_params(*this);
   }
@@ -604,7 +577,7 @@ private:
           n == "csf.class_threshold" || n == "csf.time_step" || n == "csf.slope_smooth" ||
           n == "clustering.tolerance" || n == "clustering.min_cluster_size" ||
           n == "clustering.max_cluster_size" ||
-          n.rfind("stem.", 0) == 0 || n.rfind("stem_filter.", 0) == 0 ||
+          n.rfind("stem.", 0) == 0 ||
           n.rfind("region_grow.", 0) == 0 ||
           n.rfind("csf_post.", 0) == 0 || n.rfind("classify.", 0) == 0 ||
           n.rfind("columnar_recovery.", 0) == 0)
@@ -1601,12 +1574,12 @@ private:
       /* Stage 3: clustering only — feed full voxel as non-ground, Euclidean 3D (CSF bypass) */
       non_ground = voxel;
       funnel.n_non_ground = non_ground->size();
-      auto r = pipeline_.sprint1.clusterer.cluster(*non_ground);
+      auto r = sprint1_.clusterer.cluster(*non_ground);
       clusters = std::move(r.clusters);
       cluster_ref_cloud = non_ground;
     } else {
       /* Stage 2 or full: CSF */
-      const auto csf_out = pipeline_.sprint1.csf_segmenter.segment(*voxel);
+      const auto csf_out = sprint1_.csf_segmenter.segment(*voxel);
       ground = csf_out.ground;
       non_ground = csf_out.non_ground;
       // Post-pass: recover fallen rocks that CSF absorbed as ground.
@@ -1672,47 +1645,9 @@ private:
             region_grower_.params.seed_max_hag_m, region_grower_.params.growth_radius_m,
             region_grower_.params.growth_z_scale, region_grower_.params.min_region_pts);
           clusters = std::move(rg.clusters);
-        } else {
-          /* Sprint 3.5 — Option 1 (off by default): band + linearity SUBTRACTION.
-             band → split into set A (linear/trunks) and set B (rest: shrubs+rocks);
-             cluster each disjoint set. Kept for comparison; fragments trees. */
-          const auto band = stem_clusterer_.extract_band(*ground, *non_ground);
-          band_cloud = band.cloud;
-          n_band_last_ = band.indices.size();
-
-          const auto mask = stem_filter_.linear_mask(*band.cloud);
-          std::vector<std::size_t> set_trunk;
-          std::vector<std::size_t> set_rest;
-          set_trunk.reserve(band.indices.size());
-          set_rest.reserve(band.indices.size());
-          for (std::size_t k = 0; k < band.indices.size(); ++k) {
-            if (k < mask.size() && mask[k]) {
-              set_trunk.push_back(band.indices[k]);
-            } else {
-              set_rest.push_back(band.indices[k]);
-            }
-          }
-
-          auto clusters_trunk = stem_clusterer_.cluster_band_subset(*non_ground, set_trunk, 0);
-          auto clusters_rest = stem_clusterer_.cluster_band_subset(
-            *non_ground, set_rest, static_cast<int>(clusters_trunk.size()));
-
-          stem_candidates->reserve(set_trunk.size());
-          for (std::size_t oi : set_trunk) {
-            stem_candidates->push_back(non_ground->points[oi]);
-          }
-          stem_candidates->width = static_cast<std::uint32_t>(stem_candidates->size());
-          stem_candidates->height = 1;
-          stem_candidates->is_dense = true;
-
-          clusters = std::move(clusters_trunk);
-          clusters.insert(
-            clusters.end(),
-            std::make_move_iterator(clusters_rest.begin()),
-            std::make_move_iterator(clusters_rest.end()));
         }
       }
-      // Cluster indices reference the non-ground cloud in both paths.
+      // Cluster indices reference the non-ground cloud.
       cluster_ref_cloud = non_ground;
     }
 
@@ -1820,12 +1755,11 @@ private:
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
 
-  forest_3d_perception::experimental::ExperimentalPipeline pipeline_;
+  forest_3d_perception::experimental::Sprint1Pipeline sprint1_;
   forest_3d_perception::experimental::StemBandClusterer stem_clusterer_;
   forest_3d_perception::experimental::ObjectOnGroundFilter object_filter_;
   forest_3d_perception::experimental::ColumnarGroundRecovery columnar_recovery_;
   mutable std::size_t n_recovered_last_{0};
-  forest_3d_perception::experimental::StemPointFilter stem_filter_;
   forest_3d_perception::experimental::StemRegionGrower region_grower_;
   forest_3d_perception::experimental::ClusterClassifier classifier_;
 

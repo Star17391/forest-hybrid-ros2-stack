@@ -105,20 +105,6 @@ lidar3d_experimental_node:
       min_region_pts: 5            # regiões menores = ruído, descartadas
       max_region_pts: 5000         # regiões maiores = ponte de sub-bosque, descartadas
 
-    # (S3.5) Pré-filtro de linearidade por ponto: PCA local em cada ponto não-solo,
-    #   mantém só estruturas LINEARES (tipo-tronco) e descarta folhagem dispersa de
-    #   arbustos/copa ANTES do clustering. Gate por LINEARIDADE (não verticalidade
-    #   pura) → mantém troncos finos e INCLINADOS; floor suave só corta linear
-    #   horizontal (troncos caídos, linhas de scan). Pontos com poucos vizinhos são
-    #   MANTIDOS (recall-safe p/ troncos finos/distantes). Tópico: …/stem_candidates.
-    #   FUTURO: substituir/complementar com region-growing por continuidade vertical
-    #   a partir do solo (Opção 2) — âncora ao solo rejeita ramos flutuantes da copa.
-    stem_filter:
-      enabled: true
-      neighbor_radius_m: 0.25      # raio da vizinhança p/ PCA local
-      min_neighbors: 5             # abaixo disto mantém o ponto (não consegue julgar)
-      linearity_min: 0.60          # ↑ mais exigente (só linhas finas) / ↓ deixa passar mais
-      verticality_floor: 0.30      # ↓ mantém troncos mais inclinados / ↑ exige mais vertical
 
     # (S3 — Opção B) Classificação por FATIAS, sem ML. O tronco é detectado pela
     #   FORMA (núcleo vertical de fatias com secção compacta e contínua), de

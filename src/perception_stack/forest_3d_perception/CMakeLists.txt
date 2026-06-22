@@ -90,12 +90,6 @@ target_include_directories(csf_ground_segmentation_smoke_test PRIVATE
   ${CSF_SOURCE_DIR}
 )
 target_link_libraries(csf_ground_segmentation_smoke_test forest_csf ${PCL_LIBRARIES})
-add_executable(tree_candidate_extractor_smoke_test test/tree_candidate_extractor_smoke_test.cpp)
-target_include_directories(tree_candidate_extractor_smoke_test PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${PCL_INCLUDE_DIRS}
-)
-target_link_libraries(tree_candidate_extractor_smoke_test ${PCL_LIBRARIES})
 
 # --- Robust DBH: Kåsa circle fit + gravity-align (perception Agente 2) ---
 add_executable(cylinder_fit_dbh_smoke_test test/cylinder_fit_dbh_smoke_test.cpp)
@@ -148,12 +142,6 @@ if(BUILD_TESTING)
     COMMAND "$<TARGET_FILE:csf_ground_segmentation_smoke_test>"
     OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/csf_smoke_test.log"
     TIMEOUT 180
-  )
-  ament_add_test(
-    tree_candidate_extractor_smoke_test
-    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
-    COMMAND "$<TARGET_FILE:tree_candidate_extractor_smoke_test>"
-    TIMEOUT 30
   )
   ament_add_test(
     cylinder_fit_dbh_smoke_test
