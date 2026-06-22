@@ -22,26 +22,6 @@ find_package(tf2_sensor_msgs REQUIRED)
 find_package(forest_hybrid_msgs REQUIRED)
 find_package(PCL 1.10 REQUIRED COMPONENTS common filters segmentation search kdtree)
 
-# --- Legacy node (unchanged) ---
-add_executable(lidar3d_segmentation_node src/lidar3d_segmentation_node.cpp)
-target_include_directories(lidar3d_segmentation_node PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${PCL_INCLUDE_DIRS}
-)
-target_link_libraries(lidar3d_segmentation_node ${PCL_LIBRARIES})
-ament_target_dependencies(lidar3d_segmentation_node
-  rclcpp
-  sensor_msgs
-  std_msgs
-  geometry_msgs
-  visualization_msgs
-  tf2
-  tf2_ros
-  tf2_geometry_msgs
-  pcl_conversions
-  tf2_sensor_msgs
-)
-
 # --- CSF library for experimental pipeline ---
 set(CSF_VENDOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/csf")
 if(EXISTS "${CSF_VENDOR_DIR}/CSF.cpp")
@@ -217,7 +197,6 @@ if(BUILD_TESTING)
 endif()
 
 install(TARGETS
-  lidar3d_segmentation_node
   lidar3d_experimental_node
   forest_landmark_class_scorer
   ARCHIVE DESTINATION lib

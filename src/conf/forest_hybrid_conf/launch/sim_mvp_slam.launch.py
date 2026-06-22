@@ -70,7 +70,6 @@ def _setup(context, *_args, **_kwargs):
             "slam_scan_topic": LaunchConfiguration("slam_scan_topic"),
             "lidar_mode": LaunchConfiguration("lidar_mode"),
             "use_experimental_lidar3d": LaunchConfiguration("use_experimental_lidar3d"),
-            "use_legacy_lidar3d": LaunchConfiguration("use_legacy_lidar3d"),
         }.items(),
     )
 
@@ -123,13 +122,8 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "use_experimental_lidar3d",
-                default_value="false",
-                description="Start lidar3d_experimental_node (CSF pipeline)",
-            ),
-            DeclareLaunchArgument(
-                "use_legacy_lidar3d",
                 default_value="true",
-                description="Start legacy lidar3d_segmentation_node",
+                description="Start lidar3d_experimental_node (CSF + stem-band + region growing)",
             ),
             DeclareLaunchArgument(
                 "start_navigation",

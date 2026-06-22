@@ -1,4 +1,4 @@
-# Experimental LiDAR pipeline (parallel to legacy lidar3d_segmentation_node).
+# LiDAR 3D perception pipeline (CSF + stem-band + region growing + caminho B sem solo).
 # Stage 0 (CSF): ground/non_ground | Stage 1 (stem band): nDSM band + 2D clustering → clusters
 
 lidar3d_experimental_node:

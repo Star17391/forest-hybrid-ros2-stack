@@ -347,43 +347,13 @@ def _opaque_setup(context, *_args, **_kwargs):
         parameters=[use_sim, lidar_classify_yaml],
     )
 
-    # Fase 1: 3D segmentation legacy (ground/trunks/obstacles) — só em modo 3D.
-    lidar3d_seg = None
+    # Perceção 3D experimental (CSF + stem-band + region growing) — só em modo 3D.
     lidar3d_exp = None
-    use_legacy_lidar3d = LaunchConfiguration("use_legacy_lidar3d").perform(context).strip().lower()
-    use_legacy_lidar3d = use_legacy_lidar3d not in ("0", "false", "no")
     use_experimental_lidar3d = LaunchConfiguration("use_experimental_lidar3d").perform(
         context
     ).strip().lower() in ("1", "true", "yes")
     if use_lidar_3d:
         seg_share = get_package_share_directory("forest_3d_perception")
-        if use_legacy_lidar3d:
-            seg_yaml = os.environ.get(
-                "FOREST_LIDAR3D_SEG_CONFIG",
-                os.path.join(seg_share, "config", "forest_3d_segmentation.yaml"),
-            )
-            seg_params = [use_sim, seg_yaml]
-            slice_overlay = os.path.join(seg_share, "config", "forest_3d_segmentation_slice.yaml")
-            column_overlay = os.path.join(
-                seg_share, "config", "forest_3d_segmentation_column.yaml"
-            )
-            use_slice = os.environ.get("FOREST_LIDAR3D_TRUNK_SLICE", "").strip().lower() in (
-                "1", "true", "yes"
-            ) or "segmentation_slice" in os.path.basename(seg_yaml)
-            use_column = os.environ.get("FOREST_LIDAR3D_TRUNK_COLUMN", "").strip().lower() in (
-                "1", "true", "yes"
-            ) or "segmentation_column" in os.path.basename(seg_yaml)
-            if os.path.isfile(slice_overlay) and use_slice:
-                seg_params.append(slice_overlay)
-            elif os.path.isfile(column_overlay) and use_column:
-                seg_params.append(column_overlay)
-            lidar3d_seg = Node(
-                package="forest_3d_perception",
-                executable="lidar3d_segmentation_node",
-                name="lidar3d_segmentation_node",
-                output="screen",
-                parameters=seg_params,
-            )
         if use_experimental_lidar3d:
             exp_yaml = os.environ.get(
                 "FOREST_LIDAR3D_EXPERIMENTAL_CONFIG",
@@ -512,8 +482,6 @@ def _opaque_setup(context, *_args, **_kwargs):
             lidar_classify,
         ]
     )
-    if lidar3d_seg is not None:
-        main_actions.append(lidar3d_seg)
     if lidar3d_exp is not None:
         main_actions.append(lidar3d_exp)
     if state_estimation is None:
@@ -607,14 +575,9 @@ def generate_launch_description() -> LaunchDescription:
                 description="FSM unchanged; do not publish support leg cmd_pos",
             ),
             DeclareLaunchArgument(
-                "use_legacy_lidar3d",
-                default_value="true",
-                description="Legacy lidar3d_segmentation_node (grid/nDSM/slice)",
-            ),
-            DeclareLaunchArgument(
                 "use_experimental_lidar3d",
-                default_value="false",
-                description="Parallel CSF + clustering pipeline (lidar3d_experimental_node)",
+                default_value="true",
+                description="Perceção 3D experimental (CSF + stem-band + region growing)",
             ),
             DeclareLaunchArgument("world", default_value="mvp_empty_flat.sdf"),
             DeclareLaunchArgument("world_path", default_value="",
