@@ -1,0 +1,50 @@
+api_version: forest.dev/v1
+name: sim-nav2
+description: >-
+  Sim forest_gentle + EKF + LiDAR 2D + Nav2 (D* Lite + MPPI) + mission bridge.
+  Legacy Pure Pursuit / navigation_node desligado.
+
+lifecycle:
+  pre_start: cleanup_hybrid
+
+panel_only:
+  require_nodes:
+    - mission_manager_node
+    - mission_nav2_bridge
+    - bt_navigator
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_hybrid_conf
+    launch: sim_mvp_slam.launch.py
+    args:
+      world: forest_gentle_trees_rocks.sdf
+      use_rviz: true
+      ekf_mode: local
+      paused: false
+      use_slam: false
+      lidar_mode: 2d
+      start_navigation: false
+      use_experimental_lidar3d: false
+      use_legacy_lidar3d: false
+      publish_map_odom_identity: true
+    delay_after_sec: 8
+  - id: nav2
+    kind: navigation
+    package: forest_nav2_bringup
+    launch: nav2_stack.launch.py
+    args:
+      use_sim_time: true
+
+wait_nodes:
+  - mission_manager_node
+  - mission_nav2_bridge
+  - bt_navigator
+  - ekf_local
+
+ui:
+  mission_panel_on_foreground: true
+  launch_hint: >-
+    Nav2 em layer separada (padrão sim-tree-slam). Único produtor de
+    /forest_gen/cmd_vel via cmd_vel_contract_relay. Teste: forest test goto --assert.

@@ -117,8 +117,10 @@ private:
       out.linear_acceleration.y = 0.0;
       out.linear_acceleration.z = 9.81;
     }
-    // Never fuse linear accel in EKF — mark unknown.
-    out.linear_acceleration_covariance[0] = -1.0;
+    // Accel linear: não fundir no EKF (2D legacy + SE3 gyro-only por agora).
+    // robot_localization: cov=-1 → medição ignorada para esse eixo.
+    // IMPORTANTE: marcar os 3 eixos — só [0]=-1 deixava ay/az com cov=0 do Gazebo.
+    out.linear_acceleration_covariance.fill(-1.0);
 
     const double g = std::sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
     if (g < 4.0 || g > 15.0) {

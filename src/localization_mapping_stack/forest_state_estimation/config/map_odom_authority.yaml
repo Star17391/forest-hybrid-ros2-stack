@@ -1,0 +1,35 @@
+# Parâmetros do map_odom_authority_node — autoridade ÚNICA do TF map→odom.
+#
+# Comuta a FONTE por modo (não há 2.º EKF):
+#   GROUND → map→odom = identidade (ground_mode: identity, fallback Fase-1)
+#            OU silencioso (ground_mode: silent) quando o Tree-SLAM for a autoridade (Fase 2+)
+#   AERIAL → map→odom derivado DIRETAMENTE da pose do ArduPilot (posição + atitude)
+#
+# Regra: nunca dois publishers de map→odom em simultâneo.
+#
+# Tópicos consumidos:
+#   /ardupilot/local_position_odom — pose AP (ENU, relativa ao home); fonte aérea
+#   /system/locomotion_mode        — OperationMode; gatilho primário (MODE_AERIAL → ar)
+#   /slam/status                   — SlamStatus (opcional; gatilho aéreo auxiliar)
+#
+# TF lido: map → base_link (snapshot no takeoff) e odom → base_link (EKF local).
+map_odom_authority_node:
+  ros__parameters:
+    map_frame:      "map"
+    odom_frame:     "odom"
+    base_link_frame: "marble_hd2/base_link"
+
+    # Comportamento no solo:
+    #   "identity" (Fase-1): MANTÉM o último map→odom — identidade antes do 1.º voo,
+    #                        correção de aterragem depois (evita teleporte p/ a origem).
+    #   "silent"   (Fase 2+): não publica; Tree-SLAM é a autoridade no solo.
+    ground_mode: "identity"
+
+    # Tópico da pose do ArduPilot (publicado pelo hybrid_hop_executor, já com orientação).
+    ardupilot_odom_topic: "/ardupilot/local_position_odom"
+
+    # Frequência de publicação do TF map→odom (Hz).
+    publish_hz: 30.0
+
+    # Timeout para lookups TF (segundos).
+    tf_lookup_timeout_sec: 0.1

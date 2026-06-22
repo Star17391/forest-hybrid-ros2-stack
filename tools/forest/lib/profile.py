@@ -132,6 +132,18 @@ def load_profile(path: Path) -> dict[str, Any]:
         raise ValueError(f"{path}: missing 'name'")
     if "layers" not in data or not isinstance(data["layers"], list):
         raise ValueError(f"{path}: missing or invalid 'layers'")
+    if data.get("status") == "legacy":
+        allow = os.environ.get("FOREST_ALLOW_LEGACY", "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if not allow:
+            reason = data.get("legacy_reason", "ver docs/LEGACY_PATHS.md")
+            raise ValueError(
+                f"Perfil LEGACY '{data['name']}' recusado ({path.name}): {reason}. "
+                "Para comparação histórica: export FOREST_ALLOW_LEGACY=1"
+            )
     return merge_launch_overrides(apply_launch_defaults(data))
 
 
@@ -151,10 +163,21 @@ def _layer_ros_args(layer: dict[str, Any], panel_only: bool) -> list[str]:
     return [_ros_arg(k, v) for k, v in args.items()]
 
 
-def list_profiles(profiles_dir: Path) -> list[str]:
+def list_profiles(profiles_dir: Path, include_legacy: bool = False) -> list[str]:
     names: set[str] = set()
     for p in profiles_dir.glob("*.yaml"):
+        if not include_legacy:
+            try:
+                data = _load_yaml_file(p)
+                if data.get("status") == "legacy":
+                    continue
+            except ValueError:
+                pass
         names.add(p.stem)
+    legacy_dir = profiles_dir / "legacy"
+    if legacy_dir.is_dir() and include_legacy:
+        for p in legacy_dir.glob("*.yaml"):
+            names.add(f"legacy/{p.stem}")
     for p in profiles_dir.glob("*.profile.bash"):
         names.add(p.name.replace(".profile.bash", ""))
     return sorted(names)
@@ -245,6 +268,11 @@ def main() -> int:
         type=Path,
         default=Path(__file__).resolve().parent.parent / "profiles",
     )
+    p_list.add_argument(
+        "--all",
+        action="store_true",
+        help="Incluir perfis legacy/ (requer FOREST_ALLOW_LEGACY para forest up)",
+    )
 
     p_emit = sub.add_parser("emit-bash", help="Emit bash profile fragment")
     p_emit.add_argument("yaml", type=Path)
@@ -260,8 +288,14 @@ def main() -> int:
 
     args = parser.parse_args()
     if args.cmd == "list":
-        for name in list_profiles(args.profiles_dir):
+        active = list_profiles(args.profiles_dir, include_legacy=False)
+        for name in active:
             print(name)
+        if args.all:
+            legacy = list_profiles(args.profiles_dir, include_legacy=True)
+            legacy_only = [n for n in legacy if n.startswith("legacy/") or n not in active]
+            for name in legacy_only:
+                print(f"[LEGACY] {name}")
         return 0
     if args.cmd == "validate":
         load_profile(args.yaml)

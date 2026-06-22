@@ -1,0 +1,37 @@
+api_version: forest.dev/v1
+name: sim-tree-slam
+description: Sim MVP + EKF SE3 + LiDAR 3D experimental (CSF + DBH+cov) + Tree-SLAM (forest_tree_slam, autoridade map->odom no solo). Ver docs/FOREST_TREE_SLAM_DESIGN.md.
+
+lifecycle:
+  pre_start: cleanup_hybrid
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_hybrid_conf
+    launch: sim_mvp_slam.launch.py
+    args:
+      world: forest_gentle_trees_rocks.sdf
+      use_rviz: true
+      ekf_mode: local
+      paused: false
+      use_slam: false
+      lidar_mode: 3d
+      use_experimental_lidar3d: true
+      use_legacy_lidar3d: false
+      publish_map_odom_identity: false
+      start_navigation: false
+  - id: tree_slam
+    kind: slam
+    package: forest_tree_slam
+    launch: tree_slam.launch.py
+    args:
+      use_sim_time: true
+
+wait_nodes:
+  - ekf_local
+  - lidar3d_experimental_node
+  - tree_slam_node
+
+ui:
+  launch_hint: "Tree-SLAM é a autoridade map->odom no solo (ground_mode=silent). Mapa de troncos em /slam/tree_map; estado em /slam/status; debug em /slam/pose_graph (display 'Tree-SLAM pose graph'). Usa um mundo com árvores (--world forest_gentle_trees_rocks ou forest_rugged_trees_rocks) — sem troncos não há landmarks para o grafo."

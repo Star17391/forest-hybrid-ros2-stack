@@ -83,6 +83,16 @@ struct RegionGrowResult
   std::size_t n_working{0};
   std::size_t n_seeds{0};                             // base points eligible to seed a region
   std::size_t n_grown{0};
+  // Region-discard diagnostics (root-cause of "seeds -> few clusters"): how many
+  // connected components were grown from a seed, and how many were thrown away for
+  // being too small (< min_region_pts, i.e. a fragmented/sparse trunk) vs too large
+  // (> max_region_pts, an understory bridge). Lets us tell a real recall loss
+  // (many small discards) from correct seed collapse (few components, no discards).
+  std::size_t n_regions_started{0};
+  std::size_t n_discarded_small{0};
+  std::size_t n_discarded_large{0};
+  std::size_t pts_in_discarded_small{0};              // points lost in small regions
+  std::size_t largest_discarded_small{0};             // size of the biggest small discard
 };
 
 class StemRegionGrower
@@ -187,10 +197,16 @@ public:
         }
       }
 
-      if (region.size() < static_cast<std::size_t>(params.min_region_pts) ||
-          region.size() > static_cast<std::size_t>(params.max_region_pts))
-      {
-        continue;  // too small (noise) or too large (understory bridge); drop
+      ++out.n_regions_started;
+      if (region.size() < static_cast<std::size_t>(params.min_region_pts)) {
+        ++out.n_discarded_small;
+        out.pts_in_discarded_small += region.size();
+        out.largest_discarded_small = std::max(out.largest_discarded_small, region.size());
+        continue;  // too small (noise OR a fragmented/sparse trunk)
+      }
+      if (region.size() > static_cast<std::size_t>(params.max_region_pts)) {
+        ++out.n_discarded_large;
+        continue;  // too large (understory bridge); drop
       }
 
       PointCluster c;

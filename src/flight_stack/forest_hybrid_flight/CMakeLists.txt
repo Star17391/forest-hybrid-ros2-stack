@@ -4,6 +4,7 @@ project(forest_hybrid_flight)
 find_package(ament_cmake REQUIRED)
 find_package(forest_hybrid_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 
@@ -22,6 +23,7 @@ target_compile_options(hybrid_hop_executor_node PRIVATE
 ament_target_dependencies(hybrid_hop_executor_node
   forest_hybrid_msgs
   geometry_msgs
+  nav_msgs
   rclcpp
   std_msgs)
 target_compile_features(hybrid_hop_executor_node PUBLIC cxx_std_17)

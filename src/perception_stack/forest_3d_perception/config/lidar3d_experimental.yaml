@@ -25,6 +25,7 @@ lidar3d_experimental_node:
     clusters_topic: /perception/lidar3d/experimental/clusters
     cluster_markers_topic: /perception/lidar3d/experimental/cluster_markers
     debug_stats_topic: /perception/lidar3d/experimental/debug_stats
+    tree_landmark_markers_topic: /perception/lidar/tree_landmark_markers
 
     csf:
       cloth_resolution: 0.5
@@ -61,6 +62,25 @@ lidar3d_experimental_node:
       percentile: 0.15
       height_threshold_m: 0.12   # ↑ menos sensível (só pedras maiores) / ↓ mais sensível
       min_points_per_cell: 2
+
+    # Recuperação de base por CONECTIVIDADE COLUMNAR — recupera a base de troncos/
+    #   rochas que o CSF "roubou" como solo, SEM limiar de altura fixo: um ponto de
+    #   solo é recuperado se a sua coluna XY tem um objeto real (estrutura non_ground
+    #   bem acima do chão) e o ponto está acima do chão verdadeiro da coluna. Colunas
+    #   sem objeto não são tocadas (ruído de solo isolado não é recuperado). Os pontos
+    #   recuperados juntam-se ao non_ground → alimentam o region growing (mais base).
+    columnar_recovery:
+      enabled: true
+      cell_m: 0.20              # resolução da coluna XY
+      ground_margin_m: 0.06     # acima do chão da coluna por mais que isto = base de objeto
+      min_object_height_m: 0.40 # a coluna "tem objeto" se o non_ground sobe isto acima do chão
+      neighbor_radius_cells: 1  # objeto também conta em células vizinhas (o pé espalha-se)
+      floor_window_cells: 2     # chão verdadeiro vem das células à volta (sob o tronco o
+                                #   ponto mais baixo da própria célula é a base roubada)
+      floor_percentile: 0.15    # PERCENTIL baixo (não o mínimo) da janela → robusto a
+                                #   declives/terreno irregular (o min subestima e recupera
+                                #   solo legítimo erradamente, ex. no spawn)
+      max_recover_m: 0.50       # só recupera a BASE baixa; acima disto já é o objeto
 
     # (S3.5 — Opção 2, ATIVA) Region growing ancorado no solo: calcula altura
     #   acima do solo (HAG) de cada ponto não-solo; SEMENTES = pontos na base
@@ -112,8 +132,79 @@ lidar3d_experimental_node:
       trunk_radius_grow_factor: 2.2  # fatia é "tronco" se raio <= factor*ref + margem
       trunk_radius_abs_margin_m: 0.10  # folga absoluta (troncos finos toleram ruído)
       trunk_center_jump_m: 0.30      # desvio XY máx. entre fatias do tronco (permite inclinação)
-      trunk_core_min_height_m: 0.80  # altura mín. do núcleo vertical p/ ser TRUNK
-      rock_max_height_m: 0.60        # ROCK: baixo
-      rock_max_aspect: 1.20          # ROCK: achatado (altura/largura)
-      shrub_max_height_m: 1.50       # até esta altura sem núcleo = SHRUB; acima = OBSTACLE
+      # CLASSIFICAÇÃO ÚNICA (refactor): TRUNK = VERTICAL (eixo principal vertical E
+      #   linha fina via PCA, robusto a esparsidade; OU núcleo de fatias denso). A copa
+      #   é BÓNUS de confiança, nunca requisito (o crop em z corta a copa de árvores
+      #   altas). ROCHA = não-vertical + superfície lisa + SEM copa. OBSTÁCULO = resto.
+      trunk_core_min_height_m: 0.80  # núcleo de fatias denso → tronco (fallback de perto)
+      trunk_min_verticality: 0.55    # |eixo principal · z| ≥ isto = verticalmente dominante
+      trunk_min_linearity: 0.40      # (l0-l1)/l0 ≥ isto = linha fina (1D) → tronco distante
+      rock_max_surface_variation: 0.10  # ≤ isto = casca smooth (global)
+      rock_max_scatter: 0.35         # ≤ isto = não-volumétrico
+      rock_max_local_roughness: 0.06 # ≤ isto = localmente smooth; acima = irregular → obstáculo
       min_points: 4                  # abaixo disto → UNKNOWN
+      # Legacy (já não decidem; mantidos p/ compatibilidade do loader):
+      rock_max_height_m: 1.50
+      rock_max_aspect: 1.20
+      shrub_min_scatter: 0.25        # SHRUB tornado legacy — já não é classificado
+      shrub_max_height_m: 1.50
+
+    # Verificação de COPA — o discriminante decisivo árvore vs rocha (Lalonde 2006:
+    #   "scatter acima de uma base vertical ⇒ árvore com copa"). Para cada candidato
+    #   olha na sua coluna XY ACIMA do seu próprio topo: se há pontos non_ground
+    #   suficientes = copa = árvore; se nada = rocha. RELATIVO ao topo do candidato
+    #   (funciona p/ árvores baixas, não é altura absoluta). Só PROMOVE a árvore
+    #   (rocha→tronco/obstáculo); a ausência de copa nunca força rocha (a copa pode
+    #   estar fora do FoV vertical quando longe).
+    canopy:
+      enabled: true
+      cell_m: 0.30        # resolução da grelha XY de alturas do non_ground
+      radius_m: 1.20      # raio da coluna XY de consulta à volta do candidato
+      margin_m: 0.30      # ignora pontos logo acima do topo (ruído); copa = acima disto
+      connect_step_m: 0.50  # CONTINUIDADE: a copa tem de ser contígua — para no 1º gap
+                            #   vertical > isto. Rocha com pontos distantes acima → 0.
+      min_count: 12       # nº mín. de pontos contíguos acima p/ "copa presente" — copa
+                          #   CONSIDERÁVEL; um cluster pequeno acima (ex. rocha dividida)
+                          #   não conta. É BÓNUS de confiança do tronco, nunca veto.
+
+    # Vertical cylinder fit (centroid + median radius) — DBH robusto + cov por deteção.
+    #   Para cada cluster TRUNK, ajusta um cilindro vertical (centroid + raio mediano).
+    #   Se o fit falhar, usa o raio de fatias como fallback (recall safe).
+    #   inlier_ratio (score de cilindricidade, Ma et al. 2025) escala a confiança:
+    #   troncos reais > 0.9, arbustos/ruído < 0.5.
+    cyl_fit:
+      min_height_m: 0.30      # rejeita clusters muito baixos antes de ajustar
+      max_radius_m: 0.80      # rejeita clusters demasiado largos (>1.6 m diâmetro)
+      max_rmse_m: 0.05        # RMSE máx. do ajuste [m]; troncos reais ~0.01–0.02 m
+      min_inlier_ratio: 0.30  # abaixo → fallback para fatias + confiança dividida
+      inlier_dist_m: 0.04     # distância ao cilindro p/ um ponto ser inlier [m]
+      max_slice_height_m: 2.50  # altura máx. dos pontos usados no fit (corta copa)
+      # Banda DBH STEM-AWARE (continuidade de raio): o raio é medido seguindo o
+      #   tronco de baixo para cima e PARANDO onde o raio explode (copa) — as fatias
+      #   baixas são semicírculos pequenos consistentes; a copa é muito maior. Não é
+      #   uma altura fixa cega (que deixava entrar copa e inflava o DBH).
+      dbh_band_low_m: 0.15      # margem acima da base (skip-base pequeno; o skip-por-raio trata do chão) [m]
+      dbh_band_high_m: 2.50     # altura máx. de procura do tronco [m]
+      stem_grow_factor: 1.8     # fatia é "copa" se raio > factor × raio-base → corta aí
+      stem_axis_jump_m: 0.20    # corta se o CENTRO da fatia salta > isto do eixo (ramo/copa)
+
+    # Alinhamento com a gravidade — só AFINA o DBH. A nuvem de cada tronco é
+    #   nivelada (Rx(-roll)Ry(-pitch) via IMU) APENAS para o cylinder fit (que assume
+    #   eixo vertical; tronco inclinado em base_link inflaciona o DBH). A base e a
+    #   covariância são RODADAS DE VOLTA para base_link antes de publicar, por isso
+    #   NÃO há dupla correção com a TF SE3 do EKF (que faz o nivelamento a jusante).
+    #   DBH/altura ficam como medidos no frame nivelado (invariantes à rotação).
+    #   Seguro deixar enabled=true independentemente de a TF ser 2D ou SE3.
+    gravity_align:
+      enabled: true
+      imu_topic: /sensors/imu/data
+      imu_timeout_sec: 0.5    # ignora IMU se mais antigo que este valor [s]
+
+    # Modelo de covariância da BASE do tronco (incerteza do CENTRO, não a espessura
+    #   do tronco). σ² = dispersão_pontos/N + (range_k·range)² + σ_floor². Alimenta
+    #   o gate de Mahalanobis do Tree-SLAM — covariância otimista deixa passar
+    #   associações erradas; pessimista demais funde tudo.
+    base_cov:
+      range_k: 0.01         # ruído do LiDAR proporcional ao range (1 cm por metro)
+      sigma_floor_m: 0.02   # piso de incerteza (oclusão/sistemático), 2 cm
+      sigma_z_m: 0.05       # incerteza de Z (solo estimado por CSF, não observado)

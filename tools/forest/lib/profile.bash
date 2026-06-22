@@ -12,6 +12,11 @@ forest_profile_resolve() {
   local yaml="${FOREST_ROOT}/profiles/${name}.yaml"
   local bash_legacy="${FOREST_ROOT}/profiles/${name}.profile.bash"
 
+  # legacy/sim-mvp-nav → profiles/legacy/sim-mvp-nav.yaml
+  if [[ "$name" == legacy/* ]]; then
+    yaml="${FOREST_ROOT}/profiles/${name}.yaml"
+  fi
+
   if [[ "${FOREST_USE_LEGACY_PROFILES:-}" == "1" && -f "$bash_legacy" ]]; then
     printf '%s' "$bash_legacy"
     return 0

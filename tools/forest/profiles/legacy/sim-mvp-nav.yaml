@@ -1,6 +1,8 @@
 api_version: forest.dev/v1
 name: sim-mvp-nav
-description: MVP flat world + EKF wheel-only (ekf_wheel_only.yaml) + navegação + RViz
+status: legacy
+legacy_reason: "Pré-SE3 wheel-only; ver docs/LEGACY_PATHS.md e forest test ekf-se3"
+description: "[LEGACY] MVP flat + EKF wheel-only + nav — não usar em dev activo"
 
 lifecycle:
   pre_start: cleanup_hybrid
@@ -23,7 +25,7 @@ layers:
 wait_nodes:
   - navigation_node
   - mission_manager_node
-  - ekf_filter_node
+  - ekf_local
 
 ui:
   mission_panel_on_foreground: true

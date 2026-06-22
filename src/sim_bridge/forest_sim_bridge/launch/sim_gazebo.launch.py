@@ -178,11 +178,13 @@ def _opaque_setup(context, *_args, **_kwargs):
     )
     pub_map_odom = LaunchConfiguration("publish_map_odom_identity").perform(context).lower()
     if use_slam:
-        # Bootstrap: static map→odom em /tf_static até o slam_toolbox publicar em /tf.
-        # Sem isto, o frame "map" não existe no arranque → RViz/state_contract falham.
-        pub_map_odom_str = "true"
-    else:
-        pub_map_odom_str = "true" if pub_map_odom in ("1", "true", "yes") else "false"
+        raise RuntimeError(
+            "use_slam:=true (slam_toolbox) está LEGACY e desactivado. "
+            "Ver docs/LEGACY_PATHS.md — substituto: forest_tree_slam (Tree-SLAM). "
+            "Comparação histórica: export FOREST_ALLOW_LEGACY=1"
+        )
+    pub_map_odom = LaunchConfiguration("publish_map_odom_identity").perform(context).lower()
+    pub_map_odom_str = "true" if pub_map_odom in ("1", "true", "yes") else "false"
 
     use_legacy = LaunchConfiguration("use_legacy_sensors").perform(context).lower() in (
         "1",
@@ -521,29 +523,7 @@ def _opaque_setup(context, *_args, **_kwargs):
         main_actions[2:2] = legacy_nodes  # após bridge + gz
     delayed_main = TimerAction(period=1.0, actions=main_actions)
 
-    slam_delayed = None
-    if use_slam and use_lidar_3d:
-        raise RuntimeError(
-            "use_slam com lidar_mode:=3d não suportado (sem /scan 2D). "
-            "Use --lidar2d ou perfil sim-lidar3d-test."
-        )
-    if use_slam:
-        if not use_state_est:
-            raise RuntimeError("use_slam requer use_state_estimation:=true (EKF odom→base).")
-        loc_share = get_package_share_directory("forest_2d_localization")
-        scan_topic = LaunchConfiguration("slam_scan_topic").perform(context).strip()
-        if not scan_topic:
-            scan_topic = "/sensors/lidar/scan"
-        slam_inc = IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                os.path.join(loc_share, "launch", "slam_toolbox_online_async.launch.py")
-            ),
-            launch_arguments={
-                "use_sim_time": LaunchConfiguration("use_sim_time"),
-                "scan_topic": scan_topic,
-            }.items(),
-        )
-        slam_delayed = TimerAction(period=10.0, actions=[slam_inc])
+    slam_delayed = None  # slam_toolbox LEGACY — bloqueado em _opaque_setup (use_slam)
 
     delayed_rviz = TimerAction(
         period=rviz_delay,
@@ -665,8 +645,9 @@ def generate_launch_description() -> LaunchDescription:
             ),
             DeclareLaunchArgument(
                 "ekf_mode",
-                default_value="wheel_only",
-                description="wheel_only | local (wheel+IMU gyro Z) — passed to state_estimation ekf_config",
+                default_value="local",
+                description="local (wheel+IMU SE3, default/melhor) | wheel_only (2D degradado, sem IMU) "
+                            "— passed to state_estimation ekf_config",
             ),
             DeclareLaunchArgument(
                 "use_slam",

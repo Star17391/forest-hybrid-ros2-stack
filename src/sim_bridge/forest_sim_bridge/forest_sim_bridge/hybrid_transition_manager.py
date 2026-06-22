@@ -20,8 +20,9 @@ from enum import IntEnum
 import rclpy
 from forest_hybrid_msgs.msg import HybridTransitionStatus, OperationMode
 from geometry_msgs.msg import PoseStamped, Twist
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64, String
 from tf2_msgs.msg import TFMessage
@@ -112,7 +113,11 @@ class HybridTransitionManager(Node):
         self._right_yaw = 0.0
         self._leg_ext = 0.0
         self._leg_positions: list[float] = []
-        self._base_z = self._spawn_z
+        self._base_z = self._spawn_z  # só telemetria (base_z_m), via pose_fused
+        # Altitude AGL do ArduPilot (relativa ao home/takeoff), fonte de verdade do "airborne".
+        # Independente do terreno e do EKF — o AP é a autoridade da pose no ar (design §6).
+        self._ap_z: float = 0.0
+        self._ap_valid: bool = False
         self._state_entered = time.monotonic()
         self._returning_to_ground = False
         self._js_seen = False
@@ -123,7 +128,8 @@ class HybridTransitionManager(Node):
             HybridTransitionStatus, "/forest_gen/hybrid/transition_status", qos
         )
         self._pub_mode = self.create_publisher(
-            OperationMode, "/system/locomotion_mode", QoSProfile(depth=1)
+            OperationMode, "/system/locomotion_mode",
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         )
         self._pub_cmd_vel = self.create_publisher(Twist, "/forest_gen/cmd_vel", 10)
         self._pub_left_yaw = self.create_publisher(
@@ -152,6 +158,10 @@ class HybridTransitionManager(Node):
         )
         # Pose_V via bridge has empty child_frame_id — use pose_fused (marble_pose_from_gz).
         self.create_subscription(PoseStamped, "/state/pose_fused", self._on_pose_fused, 10)
+        # Altitude AGL do ArduPilot (z em ENU, relativo ao home) — gatilho de "airborne".
+        self.create_subscription(
+            Odometry, "/ardupilot/local_position_odom", self._on_ap_odom, 10
+        )
         if self._use_pose_fallback:
             self.create_subscription(
                 TFMessage, "/forest_gen/gz/world_tf_full", self._on_world_tf_full, 10
@@ -272,6 +282,14 @@ class HybridTransitionManager(Node):
 
     def _on_pose_fused(self, msg: PoseStamped) -> None:
         self._base_z = float(msg.pose.position.z)
+
+    def _on_ap_odom(self, msg: Odometry) -> None:
+        # z em ENU = AGL acima do home/takeoff do ArduPilot (terreno-independente).
+        self._ap_z = float(msg.pose.pose.position.z)
+        self._ap_valid = True
+
+    def _is_airborne(self) -> bool:
+        return self._ap_valid and self._ap_z >= self._airborne_z
 
     def _enter(self, state: State, detail: str) -> None:
         self._state = state
@@ -448,9 +466,9 @@ class HybridTransitionManager(Node):
             self._enter(State.AERIAL_FLY, "aerial mode (ArduPilot controla o voo)")
 
         elif self._state == State.AERIAL_FLY:
-            # O FSM apenas observa a subida (pose); a propulsão é do ArduPilot.
+            # O FSM apenas observa a subida (AGL do AP); a propulsão é do ArduPilot.
             self._zero_ground_cmd()
-            if self._base_z >= self._airborne_z:
+            if self._is_airborne():
                 self._enter(State.AERIAL_HOVER, "airborne")
 
         elif self._state == State.AERIAL_HOVER:
@@ -472,7 +490,8 @@ class HybridTransitionManager(Node):
         s.base_z_m = self._base_z
         # Sem controlador multicopter ROS: a propulsão aérea é toda do ArduPilot.
         s.multicopter_enabled = False
-        s.airborne = self._base_z >= self._airborne_z
+        # airborne via AGL do ArduPilot (relativo ao home) — terreno-independente, sem EKF.
+        s.airborne = self._is_airborne()
         self._pub_status.publish(s)
 
 

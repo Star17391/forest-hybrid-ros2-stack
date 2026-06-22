@@ -1,0 +1,31 @@
+# Parâmetros do gnss_cov_adapter_node.
+# Infla a covariância do NavSatFix para valores realistas sob dossel florestal.
+#
+# Ref: docs/perception/references/2024_gnss_under_canopy_degradation.md
+#   Recetores comuns sob dossel: 5–20 m de erro horizontal → var = 25–400 m²
+#   Survey-grade sob dossel: ~80 cm → var ≈ 0.64 m²
+#   Covariância otimista é a causa nº1 de falha de fusão no EKF global.
+gnss_cov_adapter_node:
+  ros__parameters:
+    # Tópico de entrada (NavSatFix raw do driver)
+    input_topic: /sensors/gnss/fix
+    # Tópico de saída (NavSatFix com covariância inflada para navsat_transform)
+    output_topic: /sensors/gnss/fix_adapted
+
+    # Covariância mínima horizontal (x,y) em m² — 5 m std = 25 m²
+    # Sob dossel não acreditamos em menos do que isto, mesmo que o driver diga.
+    min_horizontal_var_m2: 25.0
+
+    # Covariância mínima vertical (z) em m² — altitude GPS é pior que horizontal.
+    # 7 m std = 49 m² — o EKF global não funde z do GPS, mas define o pior caso.
+    min_vertical_var_m2: 49.0
+
+    # Factor de inflação adicional baseado no HDOP (se disponível no NavSatFix).
+    # var_final = max(min_horizontal_var, hdop² * hdop_base_var_m2)
+    # hdop=1 → base; hdop=5 → 25x base. Ausente ou 0 → usa min_horizontal_var.
+    hdop_base_var_m2: 4.0      # (2 m std)² para HDOP=1 (céu aberto)
+    hdop_scale_enabled: true   # false → usa sempre min_horizontal_var (modo conservador)
+
+    # Se a covariância já fornecida pelo driver for maior do que o mínimo, respeitá-la.
+    # true = usa max(driver_cov, min_cov); false = substitui sempre pelo mínimo.
+    trust_driver_if_larger: true

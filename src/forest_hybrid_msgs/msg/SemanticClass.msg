@@ -5,6 +5,7 @@ uint8 CLASS_VEGETATION_SOFT=2
 uint8 CLASS_VEGETATION_RIGID=3
 uint8 CLASS_OBSTACLE=4
 uint8 CLASS_SKY=5
+uint8 CLASS_ROCK=6
 
 uint8 class_id
 string class_name

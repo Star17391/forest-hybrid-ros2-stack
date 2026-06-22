@@ -1,9 +1,15 @@
-# EKF without GNSS input (odom + IMU + wheel velocities).
-ekf_filter_node:
+# EKF local SE3: odom→base via wheel + IMU gyro 3D (sem accel linear).
+# Sources:
+#   odom0 (/sensors/wheel_odometry): vx (lagarta), vyaw (virar)
+#   imu0  (/sensors/imu/data):       angular velocities 3D (accel bloqueada no sanitizer)
+# Nota: z/roll/pitch são fracamente observáveis só com wheel+gyro; o EKF global
+# corrige drift horizontal via GNSS/ArduPilot. z no solo ancora-se indirectamente
+# no voo via ArduPilot (odom2).
+ekf_local:
   ros__parameters:
-    frequency: 10.0
+    frequency: 30.0
     sensor_timeout: 0.5
-    two_d_mode: true
+    two_d_mode: false         # SE3 completo — necessário para representar altitude de voo
     transform_time_offset: 0.0
     transform_timeout: 0.0
     print_diagnostics: false
@@ -18,6 +24,7 @@ ekf_filter_node:
     world_frame: odom
 
     odom0: /sensors/wheel_odometry
+    # Lagarta: funde vx (avanço) e vyaw (guinada). vy/vz não observáveis por rodas.
     odom0_config: [false, false, false,
                    false, false, false,
                    true,  false, false,
@@ -26,55 +33,66 @@ ekf_filter_node:
     odom0_queue_size: 5
     odom0_differential: false
     odom0_relative: false
+    odom0_twist_rejection_threshold: 15.0
 
     imu0: /sensors/imu/data
-    # Gazebo IMU: no valid orientation — fuse gyro Z only (2D yaw rate).
+    # SE3: ROLL/PITCH ABSOLUTOS (orientação) + gyro 3D (velocidades angulares).
+    # Os roll/pitch absolutos ANCORAM a atitude à gravidade (o IMU do Gazebo dá
+    # orientação válida; o imu_sanitize preserva-a com cov sã). SEM eles, em
+    # two_d_mode=false o roll/pitch integram só do gyro → DERIVA sem limite,
+    # sobretudo após rotações → TF odom→base inclina-se → nuvens com altura errada
+    # no RViz. (Era a causa do drift visível: o two_d_mode antigo mascarava isto
+    # forçando roll/pitch=0.) Yaw absoluto NÃO fundido (heading sem magnetómetro
+    # fiável sob dossel) — vem do gyro+wheel. Accel linear NÃO fundida (cov=-1).
     imu0_config: [false, false, false,
+                  true,  true,  false,
                   false, false, false,
-                  false, false, false,
-                  false, false, true,
+                  true,  true,  true,
                   false, false, false]
     imu0_queue_size: 10
     imu0_nodelay: true
     imu0_differential: false
     imu0_relative: false
-    imu0_remove_gravitational_acceleration: false
+    imu0_remove_gravitational_acceleration: true
     imu0_twist_rejection_threshold: 2.0
     imu0_angular_velocity_rejection_threshold: 2.0
 
-    odom0_twist_rejection_threshold: 15.0
-
+    # State: x,y,z, roll,pitch,yaw, vx,vy,vz, vroll,vpitch,vyaw, ax,ay,az
+    # roll/pitch: agora ANCORADOS pela orientação absoluta do IMU (imu0_config).
+    # z: ainda sem observação no solo (wheel dá z=0, IMU não dá z) → process noise
+    # BAIXO (0.02) para limitar o drift vertical; a altitude real vem do ArduPilot
+    # no voo (map→odom) e o fecho do Tree-SLAM corrige o resíduo no solo.
     process_noise_covariance: [0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
                                0.0,  0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.03, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.02, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.05, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
                                0.0,  0.0,  0.0,  0.0,  0.0,  0.06, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025,0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.025,0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.04, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.10, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,  0.0,
                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,
                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.02, 0.0,  0.0,  0.0,
                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,
                                0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,
-                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.015]
+                               0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.05]
 
-    # 15x15 matriz: x,y,z,r,p,y,vx,vy,vz,vr,vp,vy,ax,ay,az.
-    # ANTERIORMENTE TRUNCADA (3 linhas em vez de 15) -> robot_localization acedia memoria
-    # nao inicializada -> estado inicial NaN -> TF NaN permanente. RAIZ DO PROBLEMA.
-    initial_estimate_covariance: [1.0, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                                  0.0, 1.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                                  0.0, 0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                                  0.0, 0.0,  0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                                  0.0, 0.0,  0.0,  0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                                  0.0, 0.0,  0.0,  0.0,  0.0,  1.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                                  0.0, 0.0,  0.0,  0.0,  0.0,  0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                                  0.0, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                                  0.0, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-                                  0.0, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,  0.0,
-                                  0.0, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1e-9, 0.0,  0.0,  0.0,  0.0,
-                                  0.0, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1e-9, 0.0,  0.0,  0.0,
-                                  0.0, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1e-9, 0.0,  0.0,
-                                  0.0, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1e-9, 0.0,
-                                  0.0, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1e-9]
+    # 15x15: covariance inicial SE3.
+    # z/roll/pitch: moderada (não 1e-9) — SE3 permite incerteza vertical inicial.
+    # ANTERIORMENTE TRUNCADA (3 linhas) -> NaN. Agora completa.
+    initial_estimate_covariance: [1.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                  0.0,  1.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                  0.0,  0.0,  0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                  0.0,  0.0,  0.0,  0.1,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                  0.0,  0.0,  0.0,  0.0,  0.1,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+                                  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,  0.0,
+                                  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,  0.0,
+                                  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,  0.0,
+                                  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,  0.0,
+                                  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01, 0.0,
+                                  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.01]

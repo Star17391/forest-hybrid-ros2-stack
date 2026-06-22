@@ -184,6 +184,30 @@ void MavlinkClient::rx_loop()
           ekf_flags_ = e.flags;
           break;
         }
+        case MAVLINK_MSG_ID_LOCAL_POSITION_NED: {
+          mavlink_local_position_ned_t lp;
+          mavlink_msg_local_position_ned_decode(&msg, &lp);
+          std::lock_guard<std::mutex> lk(state_mutex_);
+          local_pos_ned_.x = lp.x;
+          local_pos_ned_.y = lp.y;
+          local_pos_ned_.z = lp.z;
+          local_pos_ned_.vx = lp.vx;
+          local_pos_ned_.vy = lp.vy;
+          local_pos_ned_.vz = lp.vz;
+          local_pos_ned_.time_boot_ms = lp.time_boot_ms;
+          local_pos_ned_.valid = true;
+          break;
+        }
+        case MAVLINK_MSG_ID_ATTITUDE: {
+          mavlink_attitude_t att;
+          mavlink_msg_attitude_decode(&msg, &att);
+          std::lock_guard<std::mutex> lk(state_mutex_);
+          attitude_.roll = att.roll;
+          attitude_.pitch = att.pitch;
+          attitude_.yaw = att.yaw;
+          attitude_.valid = true;
+          break;
+        }
         case MAVLINK_MSG_ID_STATUSTEXT: {
           mavlink_statustext_t st;
           mavlink_msg_statustext_decode(&msg, &st);
@@ -331,6 +355,18 @@ void MavlinkClient::takeoff(double alt_m)
     0, 0, 0, 0, 0, 0, static_cast<float>(alt_m));
   const int len = mavlink_msg_to_send_buffer(buf, &msg);
   send_buffer(buf, len);
+}
+
+MavlinkClient::LocalPositionNed MavlinkClient::get_local_position() const
+{
+  std::lock_guard<std::mutex> lk(state_mutex_);
+  return local_pos_ned_;
+}
+
+MavlinkClient::Attitude MavlinkClient::get_attitude() const
+{
+  std::lock_guard<std::mutex> lk(state_mutex_);
+  return attitude_;
 }
 
 void MavlinkClient::send_position_target_ned(double north, double east, double down)

@@ -130,11 +130,36 @@ struct PipelineFunnelStats
   std::size_t n_voxel{0};
   std::size_t n_ground{0};
   std::size_t n_non_ground{0};
+  // Region-growing funnel (root-cause separation): working set (HAG in band) and
+  // ground seeds that actually start a region. A trunk with NO seed this frame is
+  // never grown -> flicker. High frame-to-frame CV of n_seeds/n_clusters => the
+  // instability is in region growing (Causa C), upstream of classify/cylinder.
+  std::size_t n_working{0};
+  std::size_t n_seeds{0};
   std::size_t n_clusters{0};
+  // Clusters the classifier labelled TRUNK (before the cylinder fit). The gap
+  // n_clusters -> n_trunk_classified isolates classify flicker (Causa B); the gap
+  // n_trunk_classified -> n_trunk_accept isolates cylinder accept/fallback (Causa A).
+  std::size_t n_trunk_classified{0};
   std::size_t n_tree_candidates{0};
   std::size_t n_tree_rejected_height{0};
   std::size_t n_tree_rejected_extent{0};
   std::size_t n_tree_rejected_verticality{0};
+  // Trunk cylinder-fit funnel (perception Agente 2): accepted TRUNK landmarks and
+  // per-criterion rejections, plus the inter-frame DBH stability proxy (-1 = n/a).
+  std::size_t n_trunk_accept{0};
+  std::size_t n_trunk_reject_radius{0};
+  std::size_t n_trunk_reject_height{0};
+  std::size_t n_trunk_reject_verticality{0};
+  std::size_t n_trunk_reject_points{0};
+  double dbh_stability_pct{-1.0};
+  bool gravity_aligned{false};
+  // Probabilistic landmark emission (Fase 1 perception).
+  std::size_t n_structural_candidates{0};
+  std::size_t n_landmarks_emitted{0};
+  std::size_t n_dominant_trunk{0};
+  std::size_t n_dominant_rock{0};
+  std::size_t n_dominant_obstacle{0};
   int pipeline_sprint{1};
   int debug_stage{0};
   double csf_ground_pct{0.0};
@@ -157,11 +182,26 @@ struct PipelineFunnelStats
         << ",\"n_voxel\":" << n_voxel
         << ",\"n_ground\":" << n_ground
         << ",\"n_non_ground\":" << n_non_ground
+        << ",\"n_working\":" << n_working
+        << ",\"n_seeds\":" << n_seeds
         << ",\"n_clusters\":" << n_clusters
+        << ",\"n_trunk_classified\":" << n_trunk_classified
         << ",\"n_tree_candidates\":" << n_tree_candidates
         << ",\"n_tree_rejected_height\":" << n_tree_rejected_height
         << ",\"n_tree_rejected_extent\":" << n_tree_rejected_extent
         << ",\"n_tree_rejected_verticality\":" << n_tree_rejected_verticality
+        << ",\"n_trunk_accept\":" << n_trunk_accept
+        << ",\"n_trunk_reject_radius\":" << n_trunk_reject_radius
+        << ",\"n_trunk_reject_height\":" << n_trunk_reject_height
+        << ",\"n_trunk_reject_verticality\":" << n_trunk_reject_verticality
+        << ",\"n_trunk_reject_points\":" << n_trunk_reject_points
+        << ",\"dbh_stability_pct\":" << dbh_stability_pct
+        << ",\"gravity_aligned\":" << (gravity_aligned ? "true" : "false")
+        << ",\"n_structural_candidates\":" << n_structural_candidates
+        << ",\"n_landmarks_emitted\":" << n_landmarks_emitted
+        << ",\"n_dominant_trunk\":" << n_dominant_trunk
+        << ",\"n_dominant_rock\":" << n_dominant_rock
+        << ",\"n_dominant_obstacle\":" << n_dominant_obstacle
         << ",\"pipeline_sprint\":" << pipeline_sprint
         << ",\"csf_ground_pct\":" << csf_ground_pct
         << ",\"crop_z_min\":" << crop_min_z

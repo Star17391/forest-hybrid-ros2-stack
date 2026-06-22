@@ -27,9 +27,9 @@ layers:
       use_sim_time: true
 
 wait_nodes:
-  - ekf_filter_node
+  - ekf_local
   - lidar3d_experimental_node
   - traversability_mapping_node
 
 ui:
-  launch_hint: "Costmap em /mapping/traversability_costmap (display 'Traversability costmap' no RViz). Sprint 0: grelha vazia que segue o robô."
+  launch_hint: "Costmap em /mapping/traversability_costmap (display 'Traversability costmap'). Sprint 1: custo = terreno (declive/buraco) + troncos (cilindros castanhos em /mapping/world_model). Usa um mundo com árvores (ex. --world forest_gentle_trees_rocks) para ver troncos."

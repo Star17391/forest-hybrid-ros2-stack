@@ -1,12 +1,15 @@
-# GNSS (NavSatFix) -> map/odom via robot_localization.
+# GNSS (NavSatFix) -> odometry/gps via robot_localization navsat_transform.
 # Datum: ajustar latitude/longitude/altitude ao local de teste (Porto area exemplo).
+#
+# NOTA: usa /sensors/gnss/fix_adapted (não raw) — covariância inflada pelo
+# gnss_cov_adapter_node para refletir degradação real sob dossel (5–20 m).
 navsat_transform:
   ros__parameters:
     frequency: 10.0
     delay: 0.0
     magnetic_declination_radians: 0.0
     yaw_offset: 0.0
-    zero_altitude: true
+    zero_altitude: true    # não funde altitude GPS (pior que baro; EKF global usa ArduPilot para z)
     broadcast_utm_transform: false
     broadcast_utm_transform_as_parent_frame: false
     publish_filtered_gps: true
@@ -14,8 +17,9 @@ navsat_transform:
     wait_for_datum: false
 
     # Tópicos (contrato stack)
+    # gps_fix usa o tópico adaptado com covariância realista
     imu0: /sensors/imu/data
-    gps_fix: /sensors/gnss/fix
+    gps_fix: /sensors/gnss/fix_adapted
     odometry/filtered: /state/odometry
 
     # Centro local ENU (substituir pelo local real / sim)

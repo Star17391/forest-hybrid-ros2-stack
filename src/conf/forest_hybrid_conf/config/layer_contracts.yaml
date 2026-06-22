@@ -1,4 +1,4 @@
-contract_version: 5
+contract_version: 6
 
 layer_contracts:
   utilities_layer:
@@ -140,3 +140,57 @@ layer_contracts:
     outputs:
       - topic: /actuators/motor_cmd
         type: std_msgs/msg/Float32MultiArray
+
+  lidar_perception_layer:
+    description: >-
+      Extração de landmarks de troncos de um único scan LiDAR (stateless, por-frame, sem tracking).
+      Publica em base_link com covariância por deteção para gate de Mahalanobis no SLAM.
+    inputs:
+      - topic: /sensors/lidar/points
+        type: sensor_msgs/msg/PointCloud2
+        notes: "Nuvem pré-processada da camada 0a (sensor_preprocess_layer)."
+    outputs:
+      - topic: /perception/lidar/tree_landmarks
+        type: forest_hybrid_msgs/msg/TreeLandmarkArray
+        notes: >-
+          frame_id=base_link; por-frame; campos base_covariance (3x3 row-major [m²]) e
+          diameter_stddev [m] preenchidos pela perceção para uso no gate de Mahalanobis do SLAM.
+          Consumidores legados que não leem covariância recebem zeros (retrocompatível).
+      - topic: /perception/lidar/semantic_points
+        type: sensor_msgs/msg/PointCloud2
+        notes: "Nuvem com label semântico por ponto (opcional; para fusão semântica futura)."
+
+  slam_layer:
+    description: >-
+      Tree-SLAM florestal por landmarks de troncos: tracking, associação, factor graph SE(2),
+      loop closure, relocalização pós-salto. Autoridade de TF map→odom no solo.
+      Estados: GROUND / AERIAL / RELOCALIZING / LOST.
+    inputs:
+      - topic: /perception/lidar/tree_landmarks
+        type: forest_hybrid_msgs/msg/TreeLandmarkArray
+        notes: "frame_id=base_link; covariância obrigatória para gate de Mahalanobis."
+      - topic: /state/odometry
+        type: nav_msgs/msg/Odometry
+        notes: "Do EKF SE3 (forest_state_estimation); usado como predição entre keyframes."
+    outputs:
+      - topic: /slam/tree_map
+        type: forest_hybrid_msgs/msg/TrackedTreeLandmarkArray
+        notes: >-
+          frame_id=map; landmarks com uid imutável, pose otimizada, DBH, covariância 3x3(x,y,DBH).
+          Consumido pela camada de mapa (forest_traversability_mapping).
+      - topic: /slam/status
+        type: forest_hybrid_msgs/msg/SlamStatus
+        notes: >-
+          Estados GROUND/AERIAL/RELOCALIZING/LOST; owns_map_to_odom=true enquanto este nó
+          é autoridade de TF map→odom. Consumido pelo EKF global e pelo mapa.
+      - topic: /slam/pose_graph
+        type: visualization_msgs/msg/MarkerArray
+        notes: "Debug; visualização do grafo de poses no RViz."
+    tf_authority:
+      map_to_odom:
+        ground_mode: forest_tree_slam
+        aerial_mode: forest_state_estimation
+        rule: >-
+          Nunca dois publishers de map→odom em simultâneo. O nó que perde autoridade
+          para de publicar TF antes de o outro começar. Sinal de comutação:
+          /slam/status.owns_map_to_odom + /system/locomotion_mode.

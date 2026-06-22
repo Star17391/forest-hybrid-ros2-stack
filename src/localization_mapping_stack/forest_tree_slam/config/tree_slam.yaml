@@ -1,0 +1,25 @@
+tree_slam_node:
+  ros__parameters:
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: marble_hd2/base_link
+    publish_hz: 10.0
+    gnss_good_variance_m2: 4.0
+    relocalization_max_scans_per_attempt: 10
+    aerial_hop_sigma_x: 3.0
+    aerial_hop_sigma_y: 3.0
+    aerial_hop_sigma_theta: 0.3
+    relocalizer_diameter_bin_max_m: 1.5
+
+    # Tracker — classificação probabilística (Fase 1)
+    tracker_promote_prob: 0.70
+    tracker_promote_margin: 0.20
+    tracker_promote_min_obs: 4
+    tracker_class_min_bearing_delta_rad: 0.15
+    tracker_class_correlated_obs_weight: 0.15
+
+    multiview_voxel_size_m: 0.02
+    multiview_coverage_bins: 36
+    multiview_saturation_coverage: 0.65
+    multiview_min_inlier_frames: 3
+    multiview_saturation_max_diameter_var: 0.0025

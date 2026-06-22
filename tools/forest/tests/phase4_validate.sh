@@ -33,14 +33,19 @@ assert "forest diag lists tf-audit" bash -c 'forest diag 2>&1 | grep -q tf-audit
 assert "scripts/diagnostics removed" test ! -f "$HYBRID_WS/scripts/diagnostics/analyze_imu_stream.py"
 
 assert "profile overrides parse" python3 -c '
+import os
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "tools/forest/lib"))
 from profile import parse_launch_overrides, merge_launch_overrides, load_profile
 o = parse_launch_overrides("use_rviz:=false,paused:=true")
 assert o["use_rviz"] is False and o["paused"] is True
-p = load_profile(Path(sys.argv[1]) / "tools/forest/profiles/sim-mvp-nav.yaml")
+os.environ["FOREST_ALLOW_LEGACY"] = "1"
+p = load_profile(Path(sys.argv[1]) / "tools/forest/profiles/legacy/sim-mvp-nav.yaml")
 ' "$HYBRID_WS"
+
+assert "ekf-se3-config validator" test -f "$HYBRID_WS/tools/diagnostics/ekf_se3_config_validate.py"
+assert "ekf-se3-config gate passes" python3 "$HYBRID_WS/tools/diagnostics/ekf_se3_config_validate.py" --repo "$HYBRID_WS"
 
 echo ""
 echo "=== Results: ${pass} passed, ${fail} failed ==="

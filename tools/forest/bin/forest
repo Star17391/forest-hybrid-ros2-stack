@@ -65,14 +65,16 @@ Options for up:
 Profiles (tools/forest/profiles/*.yaml):
   sim-minimal        Sim + pose bridge (fast)
   sim-pose-bridge    Pose bridge + nav (+ panel if foreground)
-  sim-mvp-nav        MVP + EKF wheel+IMU + nav (default world in YAML)
-  sim-mvp-nav-imu  MVP + EKF wheel+IMU (Fase 0 A/B)
+  sim-lidar3d-experimental  LiDAR 3D legacy + CSF experimental (A/B) — caminho activo
   sim-lidar3d-test   LiDAR 3D + legacy segmentation + RViz
-  sim-lidar3d-experimental  LiDAR 3D legacy + CSF experimental (A/B)
+  sim-nav2           Nav2 (D* Lite + MPPI) + mission bridge — forest_gentle
   sim-lidar3d-csf-only      LiDAR 3D só CSF experimental
   sim-sensors-only   Sensors validation world
   sim-teleop         Sim + mundo YAML (editar world:) + forest teleop
   sim-hybrid-test    Mundo plano + robô híbrido + FSM transição ground→aerial
+
+Legacy (profiles/legacy/ — requer FOREST_ALLOW_LEGACY=1):
+  sim-mvp-nav, sim-mvp-nav-imu, sim-slam-nav  — ver docs/LEGACY_PATHS.md
 
 Environment:
   HYBRID_WS, FORESTGEN_PATH, FOREST_STATE_DIR

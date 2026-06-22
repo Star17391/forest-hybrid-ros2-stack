@@ -131,6 +131,21 @@ Visualization Manager:
         Reliability Policy: Best Effort
         Value: /perception/lidar3d/experimental/stem_band
       Use Fixed Frame: true
+    - Autocompute Intensity Bounds: true
+      Class: rviz_default_plugins/PointCloud2
+      Color: 0; 255; 128
+      Color Transformer: FlatColor
+      Enabled: true
+      Name: Trunk fit points (cilindro)
+      Size (m): 0.05
+      Style: Spheres
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Best Effort
+        Value: /perception/lidar3d/experimental/trunk_fit_points
+      Use Fixed Frame: true
     - Alpha: 0.7
       Class: rviz_default_plugins/Map
       Color Scheme: costmap
@@ -149,6 +164,39 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /mapping/traversability_costmap_updates
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Tree landmarks (DBH cilindros)
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /perception/lidar/tree_landmark_markers
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: World model (trunks)
+      Namespaces:
+        {}
+      Topic:
+        Depth: 1
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /mapping/world_model
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: Tree-SLAM pose graph
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /slam/pose_graph
     - Alpha: 1
       Class: grid_map_rviz_plugin/GridMap
       Color Layer: elevation_smooth

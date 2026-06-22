@@ -38,7 +38,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "tools/forest/lib"))
 from profile import load_profile
 os.environ["FOREST_LAUNCH_OVERRIDES"] = "use_rviz:=false"
-p = load_profile(Path(sys.argv[1]) / "tools/forest/profiles/sim-mvp-nav.yaml")
+os.environ["FOREST_ALLOW_LEGACY"] = "1"
+p = load_profile(Path(sys.argv[1]) / "tools/forest/profiles/legacy/sim-mvp-nav.yaml")
 args = p["layers"][0]["args"]
 assert args.get("use_rviz") is False, args
 ' "$HYBRID_WS"

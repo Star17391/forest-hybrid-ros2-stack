@@ -72,6 +72,14 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   target_compile_options(forest_csf PRIVATE -Wno-pedantic)
 endif()
 
+# --- Scorer suave reutilizável (P-C / S-F) ---
+add_library(forest_landmark_class_scorer src/landmark_class_scorer.cpp)
+target_include_directories(forest_landmark_class_scorer PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  ${PCL_INCLUDE_DIRS}
+)
+target_link_libraries(forest_landmark_class_scorer PUBLIC ${PCL_LIBRARIES})
+
 # --- Experimental node (parallel pipeline) ---
 add_executable(lidar3d_experimental_node src/lidar3d_experimental_node.cpp)
 target_include_directories(lidar3d_experimental_node PRIVATE
@@ -109,6 +117,49 @@ target_include_directories(tree_candidate_extractor_smoke_test PRIVATE
 )
 target_link_libraries(tree_candidate_extractor_smoke_test ${PCL_LIBRARIES})
 
+# --- Robust DBH: Kåsa circle fit + gravity-align (perception Agente 2) ---
+add_executable(cylinder_fit_dbh_smoke_test test/cylinder_fit_dbh_smoke_test.cpp)
+target_include_directories(cylinder_fit_dbh_smoke_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${PCL_INCLUDE_DIRS}
+)
+target_link_libraries(cylinder_fit_dbh_smoke_test ${PCL_LIBRARIES})
+
+add_executable(trunk_band_canopy_rejection_test test/trunk_band_canopy_rejection_test.cpp)
+target_include_directories(trunk_band_canopy_rejection_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${PCL_INCLUDE_DIRS}
+)
+target_link_libraries(trunk_band_canopy_rejection_test ${PCL_LIBRARIES})
+
+add_executable(soft_cluster_scorer_test test/soft_cluster_scorer_test.cpp)
+target_include_directories(soft_cluster_scorer_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${PCL_INCLUDE_DIRS}
+)
+target_link_libraries(soft_cluster_scorer_test ${PCL_LIBRARIES})
+
+add_executable(accumulated_cloud_scorer_test test/accumulated_cloud_scorer_test.cpp)
+target_include_directories(accumulated_cloud_scorer_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${PCL_INCLUDE_DIRS}
+)
+target_link_libraries(accumulated_cloud_scorer_test ${PCL_LIBRARIES})
+
+add_executable(soft_scorer_continuity_test test/soft_scorer_continuity_test.cpp)
+target_include_directories(soft_scorer_continuity_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${PCL_INCLUDE_DIRS}
+)
+target_link_libraries(soft_scorer_continuity_test ${PCL_LIBRARIES})
+
+add_executable(path_b_no_ground_test test/path_b_no_ground_test.cpp)
+target_include_directories(path_b_no_ground_test PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${PCL_INCLUDE_DIRS}
+)
+target_link_libraries(path_b_no_ground_test ${PCL_LIBRARIES})
+
 if(BUILD_TESTING)
   find_package(ament_cmake_test REQUIRED)
   ament_add_test(
@@ -124,16 +175,61 @@ if(BUILD_TESTING)
     COMMAND "$<TARGET_FILE:tree_candidate_extractor_smoke_test>"
     TIMEOUT 30
   )
+  ament_add_test(
+    cylinder_fit_dbh_smoke_test
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    COMMAND "$<TARGET_FILE:cylinder_fit_dbh_smoke_test>"
+    OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/cylinder_fit_dbh_smoke_test.log"
+    TIMEOUT 30
+  )
+  ament_add_test(
+    trunk_band_canopy_rejection_test
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    COMMAND "$<TARGET_FILE:trunk_band_canopy_rejection_test>"
+    OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/trunk_band_canopy_rejection_test.log"
+    TIMEOUT 30
+  )
+  ament_add_test(
+    soft_cluster_scorer_test
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    COMMAND "$<TARGET_FILE:soft_cluster_scorer_test>"
+    TIMEOUT 30
+  )
+  ament_add_test(
+    accumulated_cloud_scorer_test
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    COMMAND "$<TARGET_FILE:accumulated_cloud_scorer_test>"
+    TIMEOUT 30
+  )
+  ament_add_test(
+    soft_scorer_continuity_test
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    COMMAND "$<TARGET_FILE:soft_scorer_continuity_test>"
+    TIMEOUT 30
+  )
+  ament_add_test(
+    path_b_no_ground_test
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    COMMAND "$<TARGET_FILE:path_b_no_ground_test>"
+    OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/path_b_no_ground_test.log"
+    TIMEOUT 30
+  )
 endif()
 
 install(TARGETS
   lidar3d_segmentation_node
   lidar3d_experimental_node
-  DESTINATION lib/${PROJECT_NAME}
+  forest_landmark_class_scorer
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
 )
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
-install(DIRECTORY include/forest_3d_perception/experimental
+install(DIRECTORY include/forest_3d_perception
   DESTINATION include
 )
+
+ament_export_include_directories(include)
+ament_export_libraries(forest_landmark_class_scorer)
 
 ament_package()

@@ -1,0 +1,8 @@
+# nuvens/saídas transitórias do harness (regeneráveis)
+out/*.npz
+out/*.xyzl
+out/*.band
+out/scene.xyzl
+out/batch*.log
+probe
+# manter: out/*.png (figuras), out/results.json

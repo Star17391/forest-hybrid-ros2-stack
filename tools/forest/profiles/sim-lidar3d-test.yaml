@@ -20,6 +20,6 @@ layers:
       # RViz: forest_mvp_sim_lidar3d.rviz (sem /map SLAM, sem /scan 2D)
 
 wait_nodes:
-  - ekf_filter_node
+  - ekf_local
   - lidar_scan_classify_node
   - lidar3d_segmentation_node

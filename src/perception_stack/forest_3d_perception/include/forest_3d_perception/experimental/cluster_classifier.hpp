@@ -37,8 +37,11 @@
 #define FOREST_3D_PERCEPTION__EXPERIMENTAL__CLUSTER_CLASSIFIER_HPP_
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <map>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -79,9 +82,20 @@ struct ClassifierParams
   float trunk_radius_abs_margin_m{0.10f};// absolute slack so thin trunks tolerate noise
   float trunk_center_jump_m{0.30f};      // max XY centre drift between stem slices (allows lean)
   float trunk_core_min_height_m{0.80f};  // min vertical span of the stem core to be a TRUNK
-  // ROCK: low and flat.
-  float rock_max_height_m{0.60f};
-  float rock_max_aspect{1.20f};          // height_span / horizontal_size
+  // TRUNK = vertical, via PCA (robust to sparsity: a distant tree is a thin vertical
+  // line) OR a dense stem core. The crown is a BONUS, never a requirement.
+  float trunk_min_verticality{0.55f};    // |principal axis · z| ≥ this → vertically dominant
+  float trunk_min_linearity{0.40f};      // (l0-l1)/l0 ≥ this → thin line (1D), not a surface
+  int canopy_min_count{12};              // crown present if ≥ this many contiguous points above
+  // ROCK vs SHRUB by SURFACE SMOOTHNESS (not just height): a rock is a well-defined
+  // smooth shell (low surface_variation / scatter); a shrub is irregular volumetric
+  // scatter (points all over). Rocks can be large, so height is a loose cap only.
+  float rock_max_height_m{1.50f};        // rochas/pedregulhos podem ser grandes
+  float rock_max_aspect{1.20f};          // height_span / horizontal_size (diagnostic, legacy)
+  float rock_max_surface_variation{0.10f}; // ≤ isto = casca smooth → ROCK
+  float rock_max_scatter{0.35f};         // ≤ isto = não-volumétrico → ROCK
+  float rock_max_local_roughness{0.06f}; // ≤ isto = localmente smooth → ROCK; acima = irregular
+  float shrub_min_scatter{0.25f};        // ≥ isto = volumétrico/irregular → SHRUB
   // SHRUB up to this height (no core); taller with no core -> OBSTACLE.
   float shrub_max_height_m{1.50f};
   int min_points{4};
@@ -96,17 +110,62 @@ struct ClusterFeatures
   float horizontal_size{0.0f};   // larger XY bbox side
   float verticality{0.0f};       // |v0 . z| from PCA (diagnostic)
   float linearity{0.0f};         // (l0 - l1) / l0 from PCA (diagnostic)
+  // Surface smoothness from PCA eigenvalues (l0≥l1≥l2):
+  float scatter{0.0f};           // l2/l0 — ~1 = volumetric (shrub), ~0 = surface (rock)
+  float surface_variation{0.0f}; // l2/(l0+l1+l2) — curvature; low = smooth shell (rock)
+  float local_roughness{0.0f};   // mean LOCAL surface variation — high = points "all over"
+                                 // (irregular vegetation), low = locally smooth (rock)
+  float canopy_above{0.0f};      // non-ground points found in the XY column ABOVE this
+                                 // cluster's top — a tree has canopy above, a rock does not
+                                 // (set by the node, which holds the full non-ground cloud)
   float trunk_core_height{0.0f}; // vertical span of the detected stem core (0 = none)
   float trunk_ref_radius{0.0f};  // reference stem radius (narrowest part)
   int n_slices{0};
   int n_points{0};
 };
 
-struct ClassifiedCluster
+/** Per-class score indices — must match TreeLandmark.msg class_scores contract. */
+constexpr std::size_t kScoreTrunk = 0;
+constexpr std::size_t kScoreRock = 1;
+constexpr std::size_t kScoreObstacle = 2;
+constexpr std::size_t kNumClassScores = 3;
+
+inline float sigmoid(float x)
 {
-  ClusterClass cls{ClusterClass::Unknown};
+  if (x >= 0.0f) {
+    const float z = std::exp(-x);
+    return 1.0f / (1.0f + z);
+  }
+  const float z = std::exp(x);
+  return z / (1.0f + z);
+}
+
+/** Argmax index into class_scores [tronco, rocha, obstáculo]. */
+inline int argmax_class_index(const std::array<float, kNumClassScores> & scores)
+{
+  int best = 0;
+  for (std::size_t i = 1; i < kNumClassScores; ++i) {
+    if (scores[i] > scores[static_cast<std::size_t>(best)]) {
+      best = static_cast<int>(i);
+    }
+  }
+  return best;
+}
+
+inline ClusterClass cluster_class_from_scores(const std::array<float, kNumClassScores> & scores)
+{
+  switch (argmax_class_index(scores)) {
+    case static_cast<int>(kScoreTrunk): return ClusterClass::Trunk;
+    case static_cast<int>(kScoreRock): return ClusterClass::Rock;
+    case static_cast<int>(kScoreObstacle): return ClusterClass::Obstacle;
+    default: return ClusterClass::Unknown;
+  }
+}
+
+struct ScoredCluster
+{
   ClusterFeatures feat;
-  float confidence{0.0f};
+  std::array<float, kNumClassScores> class_scores{{0.0f, 0.0f, 0.0f}};
 };
 
 class ClusterClassifier
@@ -176,12 +235,87 @@ public:
       Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(cov);
       if (es.info() == Eigen::Success) {
         const Eigen::Vector3d evals = es.eigenvalues();
-        const double l0 = std::max(evals(2), 1e-9);
-        const double l1 = std::max(evals(1), 0.0);
+        const double l0 = std::max(evals(2), 1e-9);  // largest
+        const double l1 = std::max(evals(1), 0.0);   // middle
+        const double l2 = std::max(evals(0), 0.0);   // smallest
         f.linearity = static_cast<float>((l0 - l1) / l0);
         f.verticality = static_cast<float>(std::abs(es.eigenvectors().col(2).normalized().z()));
+        // Smoothness: a rock is a thin shell (l2 tiny vs l0) → low scatter/variation;
+        // a shrub fills the volume (l2 ~ l0) → high scatter/variation.
+        f.scatter = static_cast<float>(l2 / l0);
+        f.surface_variation = static_cast<float>(l2 / (l0 + l1 + l2));
       }
     }
+  }
+
+  /**
+   * Mean LOCAL surface variation over the cluster. For each sampled point, take its
+   * neighbours within a small voxel neighbourhood and PCA them: a rock is locally a
+   * smooth surface (small smallest-eigenvalue → low local variation) EVEN if globally
+   * curved; irregular vegetation has points "all over" so every local patch is a
+   * blob (high local variation). This catches what GLOBAL PCA misses: scattered
+   * points that happen to lie in a global plane (read as smooth) but are locally
+   * chaotic. Grid hash keeps it O(N).
+   */
+  static float local_roughness(const PointCluster & c, float cell = 0.20f)
+  {
+    const auto & pts = c.cloud->points;
+    if (pts.size() < 12) {
+      return 0.0f;
+    }
+    using Key = std::array<int, 3>;
+    std::map<Key, std::vector<int>> grid;
+    auto cell_of = [cell](const pcl::PointXYZ & p) -> Key {
+      return {static_cast<int>(std::floor(p.x / cell)),
+              static_cast<int>(std::floor(p.y / cell)),
+              static_cast<int>(std::floor(p.z / cell))};
+    };
+    for (int i = 0; i < static_cast<int>(pts.size()); ++i) {
+      grid[cell_of(pts[i])].push_back(i);
+    }
+    const int step = std::max<int>(1, static_cast<int>(pts.size()) / 200);  // cap work
+    double acc = 0.0;
+    int cnt = 0;
+    for (int i = 0; i < static_cast<int>(pts.size()); i += step) {
+      const Key k0 = cell_of(pts[i]);
+      std::vector<int> nb;
+      for (int dx = -1; dx <= 1; ++dx) {
+        for (int dy = -1; dy <= 1; ++dy) {
+          for (int dz = -1; dz <= 1; ++dz) {
+            auto it = grid.find({k0[0] + dx, k0[1] + dy, k0[2] + dz});
+            if (it != grid.end()) {
+              nb.insert(nb.end(), it->second.begin(), it->second.end());
+            }
+          }
+        }
+      }
+      if (nb.size() < 6) {
+        continue;
+      }
+      double mx = 0, my = 0, mz = 0;
+      for (int j : nb) { mx += pts[j].x; my += pts[j].y; mz += pts[j].z; }
+      const double in = 1.0 / static_cast<double>(nb.size());
+      mx *= in; my *= in; mz *= in;
+      Eigen::Matrix3d cov = Eigen::Matrix3d::Zero();
+      for (int j : nb) {
+        const double dx = pts[j].x - mx, dy = pts[j].y - my, dz = pts[j].z - mz;
+        cov(0, 0) += dx * dx; cov(0, 1) += dx * dy; cov(0, 2) += dx * dz;
+        cov(1, 1) += dy * dy; cov(1, 2) += dy * dz; cov(2, 2) += dz * dz;
+      }
+      cov(1, 0) = cov(0, 1); cov(2, 0) = cov(0, 2); cov(2, 1) = cov(1, 2);
+      cov *= in;
+      Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(cov);
+      if (es.info() != Eigen::Success) {
+        continue;
+      }
+      const Eigen::Vector3d ev = es.eigenvalues();  // ascending: ev(0)≤ev(1)≤ev(2)
+      const double sum = ev(0) + ev(1) + ev(2);
+      if (sum > 1e-12) {
+        acc += ev(0) / sum;  // local surface variation
+        ++cnt;
+      }
+    }
+    return cnt > 0 ? static_cast<float>(acc / cnt) : 0.0f;
   }
 
   /** Cut the cluster into horizontal slices (ascending Z), with centre+radius. */
@@ -296,61 +430,112 @@ public:
     return best_span;
   }
 
-  ClassifiedCluster classify(const PointCluster & c) const
+  /**
+   * Pure soft scorer: features → normalized [P(tronco), P(rocha), P(obstáculo)].
+   * Reusable by the SLAM layer on accumulated multi-view clouds (Fase 3).
+   */
+  static std::array<float, kNumClassScores> score_class_probs(
+    const ClusterFeatures & f, const ClassifierParams & p, float canopy)
   {
-    ClassifiedCluster out;
+    constexpr float s_v = 0.08f;
+    constexpr float s_l = 0.08f;
+    constexpr float s_c = 0.15f;
+    constexpr float s_s = 0.02f;
+    constexpr float s_r = 0.015f;
+    constexpr float s_h = 0.20f;
+
+    const float ev_vert = sigmoid((f.verticality - p.trunk_min_verticality) / s_v);
+    const float ev_line = sigmoid((f.linearity - p.trunk_min_linearity) / s_l);
+    const float ev_core = sigmoid(
+      (f.trunk_core_height - p.trunk_core_min_height_m) / s_c);
+    const float ev_smooth = sigmoid(
+      (p.rock_max_surface_variation - f.surface_variation) / s_s);
+    const float ev_rough = sigmoid(
+      (p.rock_max_local_roughness - f.local_roughness) / s_r);
+    const float ev_crown = canopy >= static_cast<float>(p.canopy_min_count) ? 1.0f : 0.0f;
+    const float ev_vert_line = ev_vert * ev_line;
+
+    const float s_tronco = std::max(
+      1e-6f,
+      ev_vert * std::max(ev_line, ev_core) * (1.0f - ev_smooth) * (0.5f + 0.5f * ev_crown));
+    const float s_rocha = std::max(
+      1e-6f,
+      ev_smooth * ev_rough * (1.0f - ev_crown) * (1.0f - ev_vert_line));
+    const float s_obstaculo = std::max(
+      1e-6f,
+      (1.0f - ev_smooth) * (1.0f - ev_vert) *
+      sigmoid((f.height_span - p.shrub_max_height_m) / s_h));
+
+    const float sum = s_tronco + s_rocha + s_obstaculo;
+    return {s_tronco / sum, s_rocha / sum, s_obstaculo / sum};
+  }
+
+  /** Extract features + soft class scores for one cluster. */
+  ScoredCluster score_cluster(const PointCluster & c, float canopy = 0.0f) const
+  {
+    ScoredCluster out;
     if (!c.cloud || c.cloud->empty()) {
       return out;
     }
     basic_features(c, out.feat);
-    auto & f = out.feat;
+    out.feat.canopy_above = canopy;
 
-    if (f.n_points < params.min_points) {
-      out.cls = ClusterClass::Unknown;
+    if (out.feat.n_points < params.min_points) {
       return out;
     }
 
     const auto slices = extract_slices(c);
-    f.n_slices = static_cast<int>(slices.size());
-    f.trunk_core_height = trunk_core_span(slices, f.trunk_ref_radius);
-
-    const float aspect = f.horizontal_size > 1e-3f
-      ? f.height_span / f.horizontal_size
-      : f.height_span;
-
-    // 1. TRUNK: a vertical stem core tall enough — at any width.
-    if (f.trunk_core_height >= params.trunk_core_min_height_m) {
-      out.cls = ClusterClass::Trunk;
-      out.confidence = std::min(1.0f, f.trunk_core_height / (2.0f * params.trunk_core_min_height_m));
-      return out;
-    }
-    // 2. ROCK: low and flat.
-    if (f.height_span <= params.rock_max_height_m && aspect <= params.rock_max_aspect) {
-      out.cls = ClusterClass::Rock;
-      out.confidence = 0.7f;
-      return out;
-    }
-    // 3. SHRUB: low-to-medium bushy vegetation with no stem core.
-    if (f.height_span <= params.shrub_max_height_m) {
-      out.cls = ClusterClass::Shrub;
-      out.confidence = 0.5f;
-      return out;
-    }
-    // 4. OBSTACLE: taller than a shrub but no stem core — a real obstacle.
-    out.cls = ClusterClass::Obstacle;
-    out.confidence = 0.5f;
+    out.feat.n_slices = static_cast<int>(slices.size());
+    out.feat.trunk_core_height = trunk_core_span(slices, out.feat.trunk_ref_radius);
+    out.feat.local_roughness = local_roughness(c);
+    out.class_scores = score_class_probs(out.feat, params, canopy);
     return out;
   }
 
-  std::vector<ClassifiedCluster> classify_all(
-    const std::vector<PointCluster> & clusters) const
+  /** Score every cluster; canopies[i] is crown evidence above cluster i (0 if absent). */
+  std::vector<ScoredCluster> score_all(
+    const std::vector<PointCluster> & clusters,
+    const std::vector<float> & canopies = {}) const
   {
-    std::vector<ClassifiedCluster> out;
+    std::vector<ScoredCluster> out;
     out.reserve(clusters.size());
-    for (const auto & c : clusters) {
-      out.push_back(classify(c));
+    for (std::size_t i = 0; i < clusters.size(); ++i) {
+      const float cy = (i < canopies.size()) ? canopies[i] : 0.0f;
+      out.push_back(score_cluster(clusters[i], cy));
     }
     return out;
+  }
+
+  /** Loose gate: cluster is worth emitting as a structural landmark candidate. */
+  bool is_structural_candidate(const ScoredCluster & s, int min_emit_points = 10) const
+  {
+    const auto & f = s.feat;
+    if (f.n_points < min_emit_points) {
+      return false;
+    }
+    if (f.height_span < 0.12f || f.horizontal_size < 0.08f) {
+      return false;
+    }
+    // Obvious shrub: volumetric, low, not vertical.
+    const bool obvious_shrub =
+      f.scatter >= params.shrub_min_scatter &&
+      f.verticality < 0.35f &&
+      f.height_span < params.shrub_max_height_m;
+    if (obvious_shrub) {
+      return false;
+    }
+    const float max_score = std::max(
+      {s.class_scores[kScoreTrunk], s.class_scores[kScoreRock], s.class_scores[kScoreObstacle]});
+    return max_score >= 0.08f;
+  }
+
+  /**
+   * P-C API — score a multi-view accumulated cloud (SLAM landmark buffer).
+   * Canopy is usually 0: inliers agregados raramente incluem copa acima.
+   */
+  ScoredCluster score_accumulated_cloud(const PointCluster & accumulated, float canopy = 0.0f) const
+  {
+    return score_cluster(accumulated, canopy);
   }
 };
 

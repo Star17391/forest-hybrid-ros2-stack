@@ -30,13 +30,25 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-for n in mission_manager_node navigation_node; do
+for n in mission_manager_node; do
   if ! ros2 node list 2>/dev/null | tr -d ' ' | grep -qx "/${n}"; then
     echo "ERROR: nó /${n} em falta." >&2
-    echo "  Arranca: forest up sim-mvp-nav -d   (e PLAY no Gazebo)" >&2
+    echo "  Arranca: forest up sim-mvp-nav -d   ou   forest up sim-nav2 -d" >&2
+    echo "  (e PLAY no Gazebo)" >&2
     exit 1
   fi
 done
+
+if ros2 node list 2>/dev/null | tr -d ' ' | grep -qx "/navigation_node"; then
+  NAV_BACKEND="legacy"
+elif ros2 node list 2>/dev/null | tr -d ' ' | grep -qx "/mission_nav2_bridge"; then
+  NAV_BACKEND="nav2"
+else
+  echo "ERROR: nem navigation_node nem mission_nav2_bridge encontrados." >&2
+  echo "  Perfis: sim-mvp-nav (legacy) ou sim-nav2 (Nav2)" >&2
+  exit 1
+fi
+echo "Navigation backend: ${NAV_BACKEND}"
 
 forest_log_section "GOTO (${TARGET_X}, ${TARGET_Y})"
 ros2 topic pub --once /mission/command forest_hybrid_msgs/msg/MissionCommand \

@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "tools/forest/lib"))
 from profile import load_profile
 root = Path(sys.argv[1]) / "tools/forest/profiles"
-for name in ("sim-minimal", "sim-pose-bridge", "sim-mvp-nav", "sim-sensors-only"):
+for name in ("sim-minimal", "sim-pose-bridge", "sim-sensors-only", "sim-lidar3d-experimental"):
     p = load_profile(root / f"{name}.yaml")
     paused = p["layers"][0]["args"].get("paused")
     assert paused is False, f"{name}: paused={paused} (expected PLAY)"

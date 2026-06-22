@@ -1,9 +1,13 @@
-# EKF sim-safe: wheel velocities only (no IMU). Re-enable IMU with ekf_local.yaml after validation.
-ekf_filter_node:
+# EKF sim degradado: SÓ wheel (sem IMU). 2D por necessidade — sem IMU não há
+# NENHUMA observação de roll/pitch/z, logo em SE3 (two_d_mode=false) estes estados
+# fariam random walk e a TF derivava (mesma falha do ekf_local pré-correção). Sem
+# sensor de atitude, o único palpite honesto é "robô plano" → two_d_mode=true.
+# Produção (com IMU) usa ekf_local.yaml (SE3 com roll/pitch absolutos ancorados).
+ekf_local:
   ros__parameters:
     frequency: 10.0
     sensor_timeout: 0.3
-    two_d_mode: true
+    two_d_mode: true          # sem IMU: assume plano (ver nota acima)
     transform_time_offset: 0.0
     transform_timeout: 0.0
     print_diagnostics: false

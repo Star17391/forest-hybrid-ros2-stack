@@ -15,3 +15,22 @@ traversability_mapping_node:
 
     # Valor de custo que mapeia para 100 no OccupancyGrid (custo normalizado 0..1).
     cost_max: 1.0
+
+    # Desenrola o buffer circular do grid_map (startIndex->0) antes das operacoes de
+    # vizinhanca, para corrigir as linhas de defeito em movimento. Se o mapa parecer
+    # espelhado/invertido no RViz, por a FALSE para confirmar se a causa e este passo.
+    defragment_buffer: true
+
+    # --- Sprint 1A: custo de terreno (derivado da elevation_smooth) ---
+    enable_terrain_cost: true
+    slope_cost_max_deg: 25.0   # declive que satura o custo em 1.0
+    step_obstacle_m: 0.35      # salto de altura na vizinhanca > isto => buraco/degrau (custo 1)
+
+    # --- Sprint 1B: troncos como cilindros (de /perception/lidar/tree_landmarks) ---
+    enable_obstacle_cost: true
+    tree_landmarks_topic: /perception/lidar/tree_landmarks
+    trunk_margin_m: 0.30       # margem larga fixa em redor do tronco (Sprint 3 estreita)
+    obstacle_inflation_m: 0.40 # inflacao suave (custo decresce ate 0)
+    obstacle_ttl_sec: 2.0      # esquece primitiva nao revista ha mais de X s
+    dedup_dist_m: 0.30         # funde deteccoes a < X m (evita duplicados por-frame)
+    min_trunk_confidence: 0.0  # ignora troncos abaixo desta confianca

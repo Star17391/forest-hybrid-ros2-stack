@@ -194,7 +194,7 @@ run_one_world() {
 
   export FOREST_NODE_WAIT_TIMEOUT="${STARTUP_TIMEOUT}"
   if ! forest_wait_for_nodes \
-    ekf_filter_node \
+    ekf_local \
     lidar_scan_classify_node \
     lidar3d_segmentation_node; then
     echo "WARNING: nodes timeout — continuing" >&2

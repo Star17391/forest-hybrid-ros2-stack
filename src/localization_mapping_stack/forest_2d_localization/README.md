@@ -1,35 +1,19 @@
-# forest_2d_localization — Fase 2
+# forest_2d_localization — **LEGACY / CONGELADO**
 
-Integração **slam_toolbox** (`async_slam_toolbox_node`) para publicar **TF `map → odom`**.
+> **Não usar.** Este pacote integrava `slam_toolbox` (SLAM 2D scan-matching).  
+> Foi **substituído** pelo desenho Tree-SLAM (`docs/FOREST_TREE_SLAM_DESIGN.md`).  
+> Ver registo completo: [`docs/LEGACY_PATHS.md`](../../../docs/LEGACY_PATHS.md).
 
-| Owner | Transform |
-|-------|-----------|
-| slam_toolbox | `map → odom` |
-| EKF (`forest_state_estimation`) | `odom → marble_hd2/base_link` |
-| static | `base_link → laser`, câmaras |
+O launch `slam_toolbox_online_async.launch.py` **falha por defeito** a menos que  
+`FOREST_ALLOW_LEGACY=1` esteja definido.
 
-**Não** activar `publish_map_odom_identity` nem `marble_pose_from_gz` em simultâneo.
+## Substituto planeado
 
-## Dependência
+| Legacy | Novo |
+|--------|------|
+| `slam_toolbox` → TF `map→odom` | `forest_tree_slam` (SE2 pose-graph) |
+| `forest_2d_localization` | `forest_tree_slam` + EKF SE3 |
 
-```bash
-sudo apt install ros-jazzy-slam-toolbox
-```
+## Histórico (referência apenas)
 
-## Launch
-
-```bash
-ros2 launch forest_2d_localization slam_toolbox_online_async.launch.py
-# ou perfil completo:
-forest up sim-slam-nav -d
-```
-
-## Scan input
-
-Default: `/perception/lidar/scan_ground` (Palacín). Se o mapa não construir, tentar:
-
-```bash
-forest up sim-slam-nav -d slam_scan_topic:=/sensors/lidar/scan
-```
-
-Contrato: [docs/LOCALIZATION_SLAM_ARCHITECTURE.md](../../../docs/LOCALIZATION_SLAM_ARCHITECTURE.md) § Fase 2.
+Integração Fase 2 (maio 2026): `async_slam_toolbox_node`, input `/perception/lidar/scan_ground`.

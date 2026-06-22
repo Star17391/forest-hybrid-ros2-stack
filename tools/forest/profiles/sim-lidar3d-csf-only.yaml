@@ -21,7 +21,7 @@ layers:
       use_legacy_lidar3d: false
 
 wait_nodes:
-  - ekf_filter_node
+  - ekf_local
   - lidar_scan_classify_node
   - lidar3d_experimental_node
 

@@ -1,0 +1,77 @@
+[23:18:09] INÍCIO sweep  trees=[1]  dists=[4]  secs=8
+escrito /home/star17391/Projetos/Gazebo/ForestGen/worlds/trunk_one_t1_d4.sdf   (Tree1 a (4.0,0) — dist=4m, az=0)
+[23:18:09] ===== t1_d4 (world=trunk_one_t1_d4) =====
+
+=== [23:18:10] Stopping session (logs: /run/user/1000/forest/sessions/20260621_230834) ===
+  SIGINT → PGID 241530 (sim)
+
+=== [23:18:12] Cleanup (forest_cleanup --hybrid term-wait=2.5s) ===
+[forest_gen_cleanup] sem processos para matar
+
+=== [23:18:13] Verifying clean state ===
+OK — nenhum processo Forest/Gazebo/RViz/navegação encontrado.
+
+=== [23:18:13] Session stopped ===
+[23:18:17]   up (headless)…
+World override: trunk_one_t1_d4.sdf
+
+=== [23:18:17] Cleanup (forest_cleanup --hybrid term-wait=2.5s) ===
+[forest_gen_cleanup] sem processos para matar
+
+=== [23:18:18] Launch layer 'sim': ros2 launch forest_hybrid_conf sim_mvp_slam.launch.py cleanup_first:=false paused:=false world:=trunk_one_t1_d4.sdf use_rviz:=false ekf_mode:=local use_slam:=false lidar_mode:=3d use_experimental_lidar3d:=true use_legacy_lidar3d:=false ===
+  pid=286971 pgid=286971 log=/run/user/1000/forest/sessions/20260621_231818/sim.log
+
+=== [23:18:18] Waiting for nodes: ekf_local lidar3d_experimental_node (timeout 120s) ===
+All nodes ready (7s)
+
+Session up: profile=sim-lidar3d-experimental logs=/run/user/1000/forest/sessions/20260621_231818
+  forest status | forest down | forest panel | forest teleop
+  (detached — use 'forest diag tf-audit' or 'forest diag tf' to check TF)
+[23:18:30]   sim pronto; estabiliza 4s e grava 8s
+A gravar 8s -> /home/star17391/Projetos/Tese/forest-hybrid-ros2-stack/src/perception_stack/forest_3d_perception/tools/canopy_isolation/bags/trunk_range_t1_d4
+[WARN] [ros2bag]: Positional "topics" argument deprecated. Please use optional "--topics" argument instead.
+stdin is not a terminal device. Keyboard handling disabled.[INFO] [1782080314.953578004] [rosbag2_recorder]: Press SPACE for pausing/resuming
+[INFO] [1782080314.953590168] [rosbag2_recorder]: Event publisher thread: Started
+[INFO] [1782080314.962843001] [rosbag2_recorder]: Starting recording to '/home/star17391/Projetos/Tese/forest-hybrid-ros2-stack/src/perception_stack/forest_3d_perception/tools/canopy_isolation/bags/trunk_range_t1_d4'
+[INFO] [1782080314.964858972] [rosbag2_recorder]: Listening for topics...
+[INFO] [1782080314.964887376] [rosbag2_recorder]: Recording...
+[INFO] [1782080314.966094128] [rosbag2_recorder]: Topics discovery started.
+[INFO] [1782080315.397104586] [rosbag2_recorder]: Subscribed to topic '/tf_static'
+[INFO] [1782080315.398845062] [rosbag2_recorder]: Subscribed to topic '/tf'
+[INFO] [1782080315.588338291] [rosbag2_recorder]: Subscribed to topic '/perception/lidar/tree_clusters'
+[INFO] [1782080315.598325219] [rosbag2_recorder]: Subscribed to topic '/perception/lidar/tree_landmark_markers'
+[INFO] [1782080315.601909346] [rosbag2_recorder]: Subscribed to topic '/perception/lidar3d/experimental/debug_stats'
+[INFO] [1782080315.606291498] [rosbag2_recorder]: Subscribed to topic '/perception/lidar/tree_landmarks'
+[INFO] [1782080315.608534478] [rosbag2_recorder]: Subscribed to topic '/perception/lidar3d/experimental/clusters'
+[INFO] [1782080315.611553425] [rosbag2_recorder]: Subscribed to topic '/perception/lidar3d/experimental/trunk_fit_points'
+[INFO] [1782080316.052186605] [rosbag2_recorder]: Subscribed to topic '/sensors/lidar/points'
+[INFO] [1782080316.052250273] [rosbag2_recorder]: All requested topics are subscribed. Stopping discovery...
+[INFO] [1782080316.052257092] [rosbag2_recorder]: Topics discovery stopped.
+[INFO] [1782080322.428214405] [rosbag2_recorder]: Pausing recording.
+[INFO] [1782080322.428286096] [rosbag2_cpp]: Writing remaining messages from cache to the bag. It may take a while
+[INFO] [1782080322.432863942] [rosbag2_recorder]: Recording stopped
+[INFO] [1782080322.443493459] [rosbag2_recorder]: Event publisher thread: Exited
+feito: /home/star17391/Projetos/Tese/forest-hybrid-ros2-stack/src/perception_stack/forest_3d_perception/tools/canopy_isolation/bags/trunk_range_t1_d4
+Duration:          7.008288170s
+Topic information: Topic: /perception/lidar/tree_clusters | Type: sensor_msgs/msg/PointCloud2 | Count: 34 | Serialization Format: cdr
+                   Topic: /perception/lidar/tree_landmark_markers | Type: visualization_msgs/msg/MarkerArray | Count: 34 | Serialization Format: cdr
+                   Topic: /perception/lidar/tree_landmarks | Type: forest_hybrid_msgs/msg/TreeLandmarkArray | Count: 33 | Serialization Format: cdr
+                   Topic: /perception/lidar3d/experimental/clusters | Type: sensor_msgs/msg/PointCloud2 | Count: 33 | Serialization Format: cdr
+                   Topic: /perception/lidar3d/experimental/debug_stats | Type: std_msgs/msg/String | Count: 34 | Serialization Format: cdr
+                   Topic: /perception/lidar3d/experimental/trunk_fit_points | Type: sensor_msgs/msg/PointCloud2 | Count: 33 | Serialization Format: cdr
+                   Topic: /sensors/lidar/points | Type: sensor_msgs/msg/PointCloud2 | Count: 31 | Serialization Format: cdr
+                   Topic: /tf | Type: tf2_msgs/msg/TFMessage | Count: 394 | Serialization Format: cdr
+                   Topic: /tf_static | Type: tf2_msgs/msg/TFMessage | Count: 5 | Serialization Format: cdr
+[23:18:43]   gravado bag trunk_range_t1_d4
+
+=== [23:18:43] Stopping session (logs: /run/user/1000/forest/sessions/20260621_231818) ===
+  SIGINT → PGID 286971 (sim)
+
+=== [23:18:45] Cleanup (forest_cleanup --hybrid term-wait=2.5s) ===
+[forest_gen_cleanup] sem processos para matar
+
+=== [23:18:46] Verifying clean state ===
+OK — nenhum processo Forest/Gazebo/RViz/navegação encontrado.
+
+=== [23:18:46] Session stopped ===
+[23:18:49] FIM sweep. Bags em /home/star17391/Projetos/Tese/forest-hybrid-ros2-stack/src/perception_stack/forest_3d_perception/tools/canopy_isolation/bags/  | log: /home/star17391/Projetos/Tese/forest-hybrid-ros2-stack/src/perception_stack/forest_3d_perception/tools/canopy_isolation/out/sweep_231809.log

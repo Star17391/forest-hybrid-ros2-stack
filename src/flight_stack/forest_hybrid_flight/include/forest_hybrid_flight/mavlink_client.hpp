@@ -48,6 +48,31 @@ public:
   bool is_armed();
   bool connected() const { return connected_.load(); }
 
+  // Posição local do ArduPilot EKF3 (NED, metros, relativa ao datum de arranque).
+  // Preenchida pelo rx_loop ao receber LOCAL_POSITION_NED.
+  struct LocalPositionNed {
+    float x{0};         // North (m)
+    float y{0};         // East  (m)
+    float z{0};         // Down  (m, negativo = altitude)
+    float vx{0};        // m/s
+    float vy{0};
+    float vz{0};
+    uint32_t time_boot_ms{0};
+    bool valid{false};  // true após o primeiro LOCAL_POSITION_NED recebido
+  };
+  LocalPositionNed get_local_position() const;
+
+  // Atitude do ArduPilot EKF3 (radianos, corpo FRD relativo a NED).
+  // Preenchida pelo rx_loop ao receber ATTITUDE. A conversão para ENU/base_link
+  // (FLU) é feita a jusante (hybrid_hop_executor, ver ap_enu.hpp).
+  struct Attitude {
+    float roll{0};      // rad (NED)
+    float pitch{0};     // rad (NED)
+    float yaw{0};       // rad (NED)
+    bool valid{false};  // true após o primeiro ATTITUDE recebido
+  };
+  Attitude get_attitude() const;
+
 private:
   void rx_loop();
   bool send_buffer(const uint8_t * buf, int len);
@@ -68,12 +93,14 @@ private:
   std::atomic<bool> connected_{false};
 
   std::mutex tx_mutex_;
-  std::mutex state_mutex_;
+  mutable std::mutex state_mutex_;
   // Estado atualizado pelo rx_loop.
   bool armed_{false};
   int gps_fix_type_{0};
   uint32_t ekf_flags_{0};
   std::vector<std::string> statustexts_;
+  LocalPositionNed local_pos_ned_;
+  Attitude attitude_;
 };
 
 }  // namespace forest_hybrid_flight

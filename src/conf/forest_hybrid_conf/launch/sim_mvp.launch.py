@@ -77,8 +77,8 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("cleanup_first", default_value="true"),
             DeclareLaunchArgument(
                 "ekf_mode",
-                default_value="wheel_only",
-                description="wheel_only | local — EKF profile for Fase 0 A/B tests",
+                default_value="local",
+                description="local (wheel+IMU SE3, default/melhor) | wheel_only (2D degradado) — EKF profile",
             ),
             DeclareLaunchArgument(
                 "rviz_delay_sec",
