@@ -29,6 +29,7 @@
 #include "forest_hybrid_msgs/msg/tracked_tree_landmark.hpp"
 #include "forest_hybrid_msgs/msg/tracked_tree_landmark_array.hpp"
 #include "forest_hybrid_msgs/msg/tree_landmark_array.hpp"
+#include "geometry_msgs/msg/pose_array.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -412,6 +413,12 @@ public:
         transient_local);
     pub_pose_graph_ = create_publisher<visualization_msgs::msg::MarkerArray>(
       "/slam/pose_graph", 10);
+    // Poses OTIMIZADAS das keyframes (índice no array = id da keyframe; estável,
+    // keyframes nunca são removidas). É a interface de ancoragem dos tiles densos
+    // de terreno: cada tile ancora a uma keyframe; no loop closure o iSAM2 move a
+    // keyframe e o consumidor aplica a correção rígida ao tile (Δ = A_now∘A0⁻¹).
+    pub_keyframes_ = create_publisher<geometry_msgs::msg::PoseArray>(
+      "/slam/keyframes", 10);
 
     const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, publish_hz_));
     timer_ = create_wall_timer(
@@ -1232,7 +1239,28 @@ private:
     publish_status();
     publish_tree_map();
     publish_pose_graph();
+    publish_keyframes();
     publish_tf();
+  }
+
+  // Poses otimizadas das keyframes X_i (frame map). Índice = id da keyframe.
+  void publish_keyframes()
+  {
+    geometry_msgs::msg::PoseArray out;
+    out.header.stamp = now();
+    out.header.frame_id = map_frame_;
+    const std::size_t n = backend_->n_keyframes();
+    out.poses.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) {
+      const Pose2 p = backend_->keyframe_pose(i);
+      geometry_msgs::msg::Pose g;
+      g.position.x = p.x;
+      g.position.y = p.y;
+      g.orientation.z = std::sin(p.theta / 2.0);
+      g.orientation.w = std::cos(p.theta / 2.0);
+      out.poses.push_back(g);
+    }
+    pub_keyframes_->publish(out);
   }
 
   void publish_status()
@@ -1787,6 +1815,7 @@ private:
   rclcpp::Publisher<forest_hybrid_msgs::msg::TrackedTreeLandmarkArray>::SharedPtr pub_tree_map_;
   rclcpp::Publisher<forest_hybrid_msgs::msg::SlamStatus>::SharedPtr pub_status_;
   rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr pub_pose_graph_;
+  rclcpp::Publisher<geometry_msgs::msg::PoseArray>::SharedPtr pub_keyframes_;
 
   rclcpp::TimerBase::SharedPtr timer_;
 };
