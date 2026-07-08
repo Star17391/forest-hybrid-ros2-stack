@@ -1265,7 +1265,24 @@ private:
           t.diameter_stddev = dbh_stddev(
             cyl.rmse, rng, cyl.arc_coverage, cov_range_k_, cov_sigma_floor_m_);
         }
-        t.confidence = max_score * (0.4f + 0.6f * cyl.inlier_ratio);
+        // Confiança REALISTA (não satura a 1): escala com a QUALIDADE da medição.
+        //  fit_f   = cilindricidade (inlier_ratio);
+        //  arc_f   = cobertura de arco (arco parcial → centro/DBH mal condicionados);
+        //  range_f = decai além de ~8 m (DBH/posição degradam com a distância);
+        //  base_f  = caminho B (base não observada) entra a metade.
+        // Assim uma deteção longe/parcial/sem-base sai com confiança baixa → não
+        // dispara nascimento de landmark no SLAM e não polui o mapa com UIDs falsos.
+        {
+          const float rng_c = static_cast<float>(
+            std::sqrt(t.base.x * t.base.x + t.base.y * t.base.y));
+          const float fit_f = 0.4f + 0.6f * cyl.inlier_ratio;
+          const float arc_f = std::clamp(cyl.arc_coverage / 0.5f, 0.2f, 1.0f);
+          const float range_f =
+            std::clamp(1.0f - std::max(0.0f, rng_c - 8.0f) / 12.0f, 0.15f, 1.0f);
+          const float base_f =
+            (i < cluster_no_ground.size() && cluster_no_ground[i]) ? 0.5f : 1.0f;
+          t.confidence = max_score * fit_f * arc_f * range_f * base_f;
+        }
         ++n_accept_cylinder;
 
         const double range = std::sqrt(t.base.x * t.base.x + t.base.y * t.base.y);
@@ -1299,7 +1316,11 @@ private:
           default: break;
         }
         fill_bbox_landmark_geometry(t, cl);
-        t.confidence = max_score * 0.5f;
+        const float rng_b = static_cast<float>(
+          std::sqrt(t.base.x * t.base.x + t.base.y * t.base.y));
+        const float range_fb =
+          std::clamp(1.0f - std::max(0.0f, rng_b - 8.0f) / 12.0f, 0.15f, 1.0f);
+        t.confidence = max_score * 0.5f * range_fb;
       }
 
       if (t.diameter < 0.1f || t.diameter > 3.0f) {

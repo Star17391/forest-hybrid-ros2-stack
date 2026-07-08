@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>forest_vision_detection</name>
+  <version>0.1.0</version>
+  <description>Camera-based object detection for forest robotics: auto-labeler (Gazebo GT) and YOLO inference node.</description>
+  <maintainer email="tese@fe.up.pt">tese</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>vision_msgs</depend>
+
+  <!-- Testes unitários correm com pytest (ver test/). Os linters ament não são
+       ativados de propósito: o código existente do pacote não segue esse estilo. -->
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

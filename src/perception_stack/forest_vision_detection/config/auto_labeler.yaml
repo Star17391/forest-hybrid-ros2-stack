@@ -1,0 +1,71 @@
+gz_auto_labeler:
+  ros__parameters:
+    # Path to the ForestGen SDF world file to parse for object GT poses.
+    # Normally resolved by the launch file from --world; override here if needed.
+    world_sdf: ""
+
+    # Where to write images/ and labels/ subdirectories (YOLO layout).
+    output_dir: "/tmp/forest_vision_labels"
+
+    # Tree labelling target:
+    #   trunk — narrow vertical box on the stem only, up to where the canopy
+    #           starts (recommended: avoids huge overlapping canopy boxes)
+    #   full  — whole tree including canopy
+    tree_target: "trunk"
+
+    # Pose source for the camera:
+    #   gz_truth — robot ground-truth pose straight from Gazebo (no EKF drift) [recommended]
+    #   tf       — TF2 lookup map→camera (degrades as odometry drifts)
+    pose_source: "gz_truth"
+    gz_pose_topic: "/world/unified_world/pose/info"
+    robot_model_name: "marble_hd2"
+    # Static base_link→camera offset (from model.sdf / marble_sensor_tf_static).
+    camera_xyz: [0.40, 0.0, 0.24]
+    camera_rpy: [0.0, 0.0, 0.0]
+
+    # TF reference frames (only used when pose_source=tf).
+    world_frame: "map"
+    camera_frame: "marble_hd2/camera_front_optical"
+
+    # Camera + depth topics (from marble_bridges.yaml).
+    image_topic: "/camera/image_raw"
+    camera_info_topic: "/camera/camera_info"
+    depth_topic: "/forest_gen/camera_front/depth"
+
+    # Objects further than this are skipped (metres).
+    max_range_m: 18.0
+
+    # Bounding box must be at least this many pixels wide AND tall to be saved.
+    min_bbox_pixels: 15
+
+    # Minimum wall-clock gap between saved frames (seconds). ~0.8s ≈ 1.25 fps.
+    save_interval_s: 0.8
+
+    # Motion gate: only save a frame when the camera viewpoint changed enough
+    # since the last saved one (either threshold triggers a save). Stops the
+    # dataset filling with near-duplicate frames while the robot is stopped or
+    # crawling. Set both to 0.0 to disable (time-gate only).
+    min_translation_m: 0.25
+    min_rotation_deg: 8.0
+
+    # Max wait for TF transform per frame (seconds).
+    tf_timeout_s: 0.15
+
+    # The static TF frame "..._optical" is published with RPY=(0,0,0) relative to
+    # base_link — i.e. it is body-oriented (x-forward), NOT a true optical frame.
+    # Keep true so projection uses the optical convention. If boxes come out
+    # rotated/mirrored in debug overlays, flip this.
+    apply_optical_rotation: true
+
+    # Depth-based occlusion rejection: drop objects hidden behind nearer geometry.
+    use_depth_occlusion: true
+    occlusion_depth_ratio: 0.65     # measured depth < ratio×object_depth ⇒ occluded
+    occlusion_min_range_m: 4.0      # only test occlusion beyond this range
+
+    # Train/val split by contiguous blocks (avoids near-duplicate frames leaking
+    # across the split). 1 in every val_block_period blocks goes to val.
+    block_size: 15
+    val_block_period: 7             # ≈14% val
+
+    # Save annotated copies under debug/ for visual verification of projection.
+    draw_debug: false

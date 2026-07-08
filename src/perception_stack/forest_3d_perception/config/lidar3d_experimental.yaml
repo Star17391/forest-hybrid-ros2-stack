@@ -6,7 +6,7 @@ lidar3d_experimental_node:
     enabled: true
     # debug_stage: 0=full 1=voxel_only 2=csf_only 3=cluster_only_3d (CSF bypass)
     debug_stage: 0
-    debug_publish_stages: true
+    debug_publish_stages: false   # OFF: evita publicar clouds debug duplicadas (CPU/banda)
     debug_log_interval: 30
 
     input_topic: /sensors/lidar/points
@@ -15,7 +15,7 @@ lidar3d_experimental_node:
 
     voxel_leaf_size_m: 0.08
     min_range_m: 0.3
-    max_range_m: 15.0
+    max_range_m: 10.0   # deteção fiável só até ~8-10m; cortar aqui = menos pontos no CSF/clustering
     min_z_m: -1.0
     max_z_m: 5.0
 
@@ -30,7 +30,7 @@ lidar3d_experimental_node:
     csf:
       cloth_resolution: 0.5
       rigidness: 3
-      iterations: 500
+      iterations: 200   # 500→200: solo praticamente idêntico, ~2.5x menos custo por scan
       class_threshold: 0.40   # (A) ligeiro: estreita banda de solo p/ pedras
       time_step: 0.65
       slope_smooth: true
@@ -47,6 +47,9 @@ lidar3d_experimental_node:
     stem:
       ground_grid_resolution_m: 0.20
       band_min_m: 0.30        # bottom of trunk band above ground
+      # NOTA: baixar para 1.8 PIOROU (recall 22→13%, fantasmas 16→24) — cortou
+      # tronco e fragmentou deteções. A causa dos fantasmas NÃO é a banda; é o
+      # NASCIMENTO de landmarks no tracker (sem gate de alcance/multi-vista). 3.0 fica.
       band_max_m: 3.00        # top of trunk band (drops canopy that glues trees)
       cluster_tolerance_m: 0.20
       cluster_min_pts: 6
