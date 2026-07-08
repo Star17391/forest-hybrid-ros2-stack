@@ -38,4 +38,18 @@ ament_export_dependencies(
   geometry_msgs nav2_core nav2_costmap_2d nav2_util rclcpp_lifecycle
   nav_msgs pluginlib rclcpp tf2_ros)
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_test REQUIRED)
+  # Teste do core (sem ROS): valida a correção do allow_unknown (255→livre) e a
+  # navegação básica (aberto / parede). Linka só o core dstar_lite.cpp.
+  add_executable(dstar_lite_core_test test/dstar_lite_core_test.cpp src/dstar_lite.cpp)
+  target_include_directories(dstar_lite_core_test PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+  target_compile_features(dstar_lite_core_test PRIVATE cxx_std_17)
+  ament_add_test(dstar_lite_core_test
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    COMMAND "$<TARGET_FILE:dstar_lite_core_test>"
+    TIMEOUT 30)
+endif()
+
 ament_package()

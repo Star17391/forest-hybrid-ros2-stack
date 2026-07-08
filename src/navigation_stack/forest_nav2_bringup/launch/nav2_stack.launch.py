@@ -15,6 +15,7 @@ def generate_launch_description() -> LaunchDescription:
 
     use_sim_time = LaunchConfiguration("use_sim_time")
     params_file = LaunchConfiguration("params_file")
+    require_slam = LaunchConfiguration("require_slam")
 
     mission = os.path.join(conf_pkg, "launch", "mission_layer_only.launch.py")
     nav2 = os.path.join(nav2_pkg, "launch", "nav2_bringup.launch.py")
@@ -26,6 +27,10 @@ def generate_launch_description() -> LaunchDescription:
                 "params_file",
                 default_value=os.path.join(nav2_pkg, "config", "nav2_params.yaml"),
             ),
+            DeclareLaunchArgument(
+                "require_slam", default_value="true",
+                description="false = conduz por odom mesmo com SLAM LOST (MVP)",
+            ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(mission),
                 launch_arguments={"use_sim_time": use_sim_time}.items(),
@@ -35,6 +40,7 @@ def generate_launch_description() -> LaunchDescription:
                 launch_arguments={
                     "use_sim_time": use_sim_time,
                     "params_file": params_file,
+                    "require_slam": require_slam,
                 }.items(),
             ),
         ]

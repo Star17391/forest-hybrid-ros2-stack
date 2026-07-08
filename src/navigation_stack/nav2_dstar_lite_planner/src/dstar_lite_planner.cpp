@@ -100,8 +100,12 @@ void DStarLitePlanner::sync_costmap(bool force_rebuild)
   const size_t n = static_cast<size_t>(width) * height;
   for (size_t i = 0; i < n; ++i) {
     unsigned char c = map[i];
-    if (!allow_unknown_ && c == 255) {
-      c = DStarLite::kLethal;
+    // NO_INFORMATION (255) >= kLethal(254): o core trata-o como LETAL. Logo, com
+    // allow_unknown=true tem de ser convertido para TRAVERSÁVEL (livre=0), senão um
+    // costmap por-povoar fica todo bloqueado e o planeador falha ("no path found").
+    // Sem allow_unknown, o desconhecido é letal (conservador).
+    if (c == 255) {
+      c = allow_unknown_ ? 0 : DStarLite::kLethal;
     }
     if (geometry_changed || last_cost_snapshot_[i] != c) {
       const int x = static_cast<int>(i % width);

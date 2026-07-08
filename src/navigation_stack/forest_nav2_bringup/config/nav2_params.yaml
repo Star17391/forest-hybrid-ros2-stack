@@ -9,9 +9,11 @@ bt_navigator:
     odom_topic: /state/odometry
     bt_loop_duration: 10
     default_server_timeout: 20
-    navigators: ["navigate_to_pose"]
+    navigators: ["navigate_to_pose", "navigate_through_poses"]
     navigate_to_pose:
       plugin: "nav2_bt_navigator::NavigateToPoseNavigator"
+    navigate_through_poses:
+      plugin: "nav2_bt_navigator::NavigateThroughPosesNavigator"
     error_code_name_prefixes:
       - compute_path
       - follow_path
@@ -38,72 +40,57 @@ controller_server:
     general_goal_checker:
       plugin: "nav2_controller::SimpleGoalChecker"
       stateful: true
-      xy_goal_tolerance: 0.35
-      yaw_goal_tolerance: 0.45
+      # XY apertado p/ chegar à coordenada (era 0.35 = parava longe). Yaw IGNORADO
+      # (3.15 rad): GOTO é de posição; com rotate_to_heading off o robô não roda no
+      # sítio para fixar o rumo final, e exigir yaw bloqueava a chegada por direções
+      # que não a do percurso. Confirmado ao vivo: chega a ~0.04 m da coordenada.
+      xy_goal_tolerance: 0.15
+      yaw_goal_tolerance: 3.15
     PathHandler:
       plugin: "nav2_controller::FeasiblePathHandler"
       prune_distance: 2.0
+    # Controlador = Regulated Pure Pursuit (RPP). Escolhido em vez do MPPI porque:
+    #  (1) MPPI é o controlador mais pesado do Nav2 (amostra batch×time_steps a 20 Hz);
+    #      com CPU saturado NÃO converge no período de controlo → comandos quase-zero
+    #      (era a causa do vx≈0.056 constante).
+    #  (2) RPP é praticamente grátis, determinístico e adequado a robô de esteiras lento
+    #      a seguir um caminho global numa floresta.
+    # IMPORTANTE: use_cost_regulated_linear_velocity_scaling = false → NÃO abranda perto
+    # de custo do costmap (inflação/fantasmas), só pela curvatura. A deteção de colisão
+    # (use_collision_detection) continua a proteger. Para voltar ao MPPI, ver histórico.
     FollowPath:
-      plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 48
-      model_dt: 0.05
-      batch_size: 1500
-      vx_std: 0.15
-      wz_std: 0.35
-      vx_max: 0.5
-      vx_min: -0.2
-      vy_max: 0.0
-      wz_max: 1.0
-      ax_max: 1.5
-      ax_min: -1.5
-      az_max: 2.0
-      iteration_count: 1
-      temperature: 0.3
-      gamma: 0.015
-      motion_model: "DiffDrive"
-      diff_drive:
-        plugin: "mppi::DiffDriveMotionModel"
-      visualize: false
-      critics:
-        [
-          "ConstraintCritic",
-          "CostCritic",
-          "GoalCritic",
-          "GoalAngleCritic",
-          "PathAlignCritic",
-          "PathFollowCritic",
-          "PathAngleCritic",
-          "PreferForwardCritic",
-        ]
-      ConstraintCritic:
-        enabled: true
-        cost_weight: 4.0
-      CostCritic:
-        enabled: true
-        cost_weight: 4.0
-        consider_footprint: false
-        collision_cost: 1000000.0
-        near_goal_distance: 1.0
-      GoalCritic:
-        enabled: true
-        cost_weight: 5.0
-        threshold_to_consider: 1.2
-      GoalAngleCritic:
-        enabled: true
-        cost_weight: 3.0
-      PreferForwardCritic:
-        enabled: true
-        cost_weight: 5.0
-      PathAlignCritic:
-        enabled: true
-        cost_weight: 12.0
-        max_path_occupancy_ratio: 0.08
-      PathFollowCritic:
-        enabled: true
-        cost_weight: 5.0
-      PathAngleCritic:
-        enabled: true
-        cost_weight: 2.0
+      plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+      desired_linear_vel: 0.4
+      min_approach_linear_velocity: 0.10
+      approach_velocity_scaling_dist: 0.6
+      # Lookahead MAIOR (era 0.6/0.9/1.5) p/ não perseguir cada degrau do caminho-grelha
+      # do D* Lite → eliminou o weaving (overshoot-corrige-overshoot) confirmado ao vivo
+      # (0 trocas de sinal do angular no cruzeiro). vel 0.4 (era 0.5): menos oscilação +
+      # saúde do SLAM (a alta velocidade + oscilação o SLAM perdia-se).
+      lookahead_dist: 0.9
+      min_lookahead_dist: 0.5
+      max_lookahead_dist: 1.3
+      lookahead_time: 2.0
+      use_velocity_scaled_lookahead_dist: true
+      transform_tolerance: 0.2
+      use_collision_detection: true
+      max_allowed_time_to_collision_up_to_carrot: 1.0
+      # Regulação: SÓ por curvatura (mantém velocidade entre árvores). Custo OFF.
+      use_regulated_linear_velocity_scaling: true
+      use_cost_regulated_linear_velocity_scaling: false
+      regulated_linear_scaling_min_radius: 0.9
+      regulated_linear_scaling_min_speed: 0.25
+      # rotate_to_heading DESLIGADO: o D* Lite produz caminhos em grelha (ziguezague
+      # a 45°), o ângulo ao carrot passava sempre os 45° → o RPP entrava em "rodar no
+      # sítio" e OSCILAVA (±0.1 rad/s) sem completar → linear ficava 0 → robô encravado.
+      # Confirmado ao vivo: com isto false o robô conduz normalmente. Para esteiras,
+      # rodar-e-andar ao mesmo tempo é adequado.
+      use_rotate_to_heading: false
+      rotate_to_heading_min_angle: 0.785
+      rotate_to_heading_angular_vel: 1.0
+      max_angular_accel: 2.0
+      allow_reversing: false
+      max_robot_pose_search_dist: 10.0
 
 local_costmap:
   local_costmap:
@@ -119,22 +106,31 @@ local_costmap:
       resolution: 0.10
       robot_radius: 0.45
       plugins: ["obstacle_layer", "inflation_layer"]
+      # LOCAL = REATIVO. Fonte = non_ground (denso → reativo; inclui troncos, ROCHAS,
+      # arbustos), mas filtrado à BANDA DE COLISÃO por altura: o critério não é
+      # "tronco vs copa" mas "o robô bate nisto?". Robô baixo (~0.5 m) → marca-se
+      # [0.1, 1.0] m (base de tronco/rocha/arbusto) e deixa-se passar a COPA (>~1 m,
+      # o robô anda por baixo). 1 ponto da base chega p/ marcar a célula 2D.
+      # NOTA: o filtro é em z ABSOLUTO (odom); em encostas fortes pode falhar — fix
+      # definitivo seria nuvem de obstáculos nDSM (terrain-relative) na perceção.
+      # NÃO usar stem_band aqui: esparso e exclui rochas (é p/ clustering de troncos).
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        observation_sources: scan
-        scan:
-          topic: /sensors/lidar/scan
-          max_obstacle_height: 2.0
-          clearing: true
+        observation_sources: cloud
+        cloud:
+          topic: /perception/lidar3d/experimental/non_ground
+          data_type: "PointCloud2"
           marking: true
-          data_type: "LaserScan"
-          raytrace_max_range: 8.0
-          obstacle_max_range: 6.0
+          clearing: true
+          min_obstacle_height: 0.1   # ignora resíduo de solo rente ao chão
+          max_obstacle_height: 1.0   # zona de colisão do robô; deixa passar a copa
+          raytrace_max_range: 9.0
+          obstacle_max_range: 8.0    # detetar mais cedo (era 6) → desvio mais cedo
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 4.0
-        inflation_radius: 0.75
+        inflation_radius: 1.0        # mais folga → desvio mais cedo e mais largo
 
 global_costmap:
   global_costmap:
@@ -148,25 +144,48 @@ global_costmap:
       width: 40
       height: 40
       resolution: 0.10
-      track_unknown_space: true
+      # Desconhecido = LIVRE: a fonte (committed_obstacles) só marca obstáculos
+      # comprometidos; sem isto o costmap fica todo unknown e o DStarLite falha
+      # ("no path found") em espaço aberto. O local reativo (non_ground) trata do
+      # que ainda não está comprometido.
+      track_unknown_space: false
       robot_radius: 0.45
       plugins: ["obstacle_layer", "inflation_layer"]
+      # GLOBAL = DELIBERATIVO. Fonte = obstáculos COMPROMETIDOS do modelo do mundo
+      # (forest_traversability_mapping, do /slam/tree_map: só promovidos + gate +
+      # histerese), publicados como PointCloud2 em frame `map`. Mesma mecânica do
+      # local (ObstacleLayer+PointCloud2), fonte e cadência DISTINTAS — sem tradutor.
+      # marking sem clearing: é mapa conhecido estável; a janela rolante trata da
+      # staleness e o uid faz o landmark seguir o loop closure.
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        observation_sources: scan
-        scan:
-          topic: /sensors/lidar/scan
-          max_obstacle_height: 2.0
-          clearing: true
+        # committed = mapa estável (troncos do SLAM); reactive = obstáculos detetados
+        # AGORA (banda de colisão, copa filtrada). Pôr o reativo no GLOBAL faz o D* Lite
+        # RE-ROTEAR à volta de obstáculos grandes → o caminho já os evita e o robô não
+        # corta de volta para dentro deles (continua a desviar até a rota ficar livre).
+        observation_sources: committed reactive
+        committed:
+          topic: /mapping/committed_obstacles
+          data_type: "PointCloud2"
           marking: true
-          data_type: "LaserScan"
-          raytrace_max_range: 12.0
-          obstacle_max_range: 10.0
+          clearing: false
+          min_obstacle_height: 0.0
+          max_obstacle_height: 2.0
+          obstacle_max_range: 30.0
+        reactive:
+          topic: /perception/lidar3d/experimental/non_ground
+          data_type: "PointCloud2"
+          marking: true
+          clearing: true   # raytrace limpa ao passar → não deixa fantasmas estáticos
+          min_obstacle_height: 0.1
+          max_obstacle_height: 1.0   # banda de colisão; deixa passar a copa
+          raytrace_max_range: 9.0
+          obstacle_max_range: 8.0
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 4.0
-        inflation_radius: 0.85
+        inflation_radius: 1.0
 
 planner_server:
   ros__parameters:
@@ -177,7 +196,10 @@ planner_server:
       plugin: "nav2_dstar_lite_planner::DStarLitePlanner"
       tolerance: 0.5
       allow_unknown: true
-      smooth_iterations: 2.0
+      # Suavização (média móvel) do caminho-grelha: 2 quase não suavizava → o RPP
+      # perseguia os degraus/curvas e oscilava. 12 puxa o caminho para linhas mais
+      # retas (a inflação dá margem para não cortar para dentro de obstáculos).
+      smooth_iterations: 12.0
 
 smoother_server:
   ros__parameters:
@@ -275,12 +297,14 @@ collision_monitor:
       min_points: 6
       visualize: false
       enabled: true
-    observation_sources: ["scan"]
-    scan:
-      type: "scan"
-      topic: "/sensors/lidar/scan"
-      min_height: 0.15
-      max_height: 2.0
+    observation_sources: ["cloud"]
+    cloud:
+      type: "pointcloud"
+      # non_ground na banda de colisão [0.1,1.0] — igual ao costmap local: parar por
+      # obstáculos reais (tronco/rocha/arbusto), não pela copa.
+      topic: "/perception/lidar3d/experimental/non_ground"
+      min_height: 0.1
+      max_height: 1.0
       enabled: true
 
 docking_server:

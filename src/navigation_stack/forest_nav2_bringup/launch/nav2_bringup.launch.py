@@ -16,6 +16,7 @@ def generate_launch_description() -> LaunchDescription:
 
     use_sim_time = LaunchConfiguration("use_sim_time")
     params_file = LaunchConfiguration("params_file")
+    require_slam = LaunchConfiguration("require_slam")
 
     nav2 = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -38,7 +39,7 @@ def generate_launch_description() -> LaunchDescription:
         executable="mission_nav2_bridge",
         name="mission_nav2_bridge",
         output="screen",
-        parameters=[{"use_sim_time": use_sim_time}],
+        parameters=[{"use_sim_time": use_sim_time, "require_slam": require_slam}],
     )
 
     cmd_vel_relay = Node(
@@ -57,6 +58,10 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument(
                 "params_file",
                 default_value=os.path.join(forest_nav2_share, "config", "nav2_params.yaml"),
+            ),
+            DeclareLaunchArgument(
+                "require_slam", default_value="true",
+                description="false = bridge conduz por odom mesmo com SLAM LOST (MVP)",
             ),
             nav2,
             bridge,

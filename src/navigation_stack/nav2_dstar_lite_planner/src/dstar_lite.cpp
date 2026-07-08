@@ -205,10 +205,22 @@ void DStarLite::compute_shortest_path_inner()
     return;
   }
 
-  const Key start_key = calculate_key(start_idx_);
+  // Teto de segurança: garante terminação mesmo perante uma inconsistência
+  // inesperada (MVP estável: nunca pendurar o planner_server / nav2).
+  const long max_iters = 50L * static_cast<long>(width_) * static_cast<long>(height_) + 1000L;
+  long iters = 0;
   while (!open_.empty()) {
+    if (++iters > max_iters) {
+      break;
+    }
+    // key(start) RECALCULADA a cada iteração (g/rhs do start mudam ao longo da
+    // procura). D* Lite (Koenig & Likhachev): processa enquanto top < key(start)
+    // OU rhs(start) != g(start); PARA quando top >= key(start) E rhs(start)==g(start).
+    // (A versão anterior calculava key(start) UMA vez com g=rhs=∞ e tinha a
+    // condição INVERTIDA → parava na 1.ª iteração → "no path found" sempre.)
+    const Key start_key = calculate_key(start_idx_);
     const QueueEntry top = open_.top();
-    if (top.key < start_key && rhs_[start_idx_] == g_[start_idx_]) {
+    if (!(top.key < start_key) && rhs_[start_idx_] == g_[start_idx_]) {
       break;
     }
 
@@ -233,7 +245,10 @@ void DStarLite::compute_shortest_path_inner()
         }
         update_vertex(index(nx, ny));
       }
-    } else {
+    } else if (g_[u] < rhs_[u]) {
+      // Só UNDERCONSISTENTE. Um vértice CONSISTENTE (g==rhs) que seja retirado é
+      // uma entrada stale (duplicado da remoção lazy) → ignorar. Se entrasse aqui,
+      // g=∞ tornava-o inconsistente de novo → re-inserção → LOOP INFINITO.
       g_[u] = kInf;
       const int ux = u % width_;
       const int uy = u / width_;
