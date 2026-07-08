@@ -1,0 +1,63 @@
+api_version: forest.dev/v1
+name: sim-tree-slam-nav2
+description: >-
+  sim-tree-slam (EKF SE3 + LiDAR 3D experimental + Tree-SLAM, autoridade map->odom)
+  + camada de mapeamento (traversability) + Nav2 (D* Lite + MPPI) como DRIVER autónomo.
+  Costmap LOCAL reativo lê a nuvem não-solo da perceção 3D (PointCloud2) diretamente.
+  Usado para conduzir o robô em laço e avaliar o SLAM (tools/diagnostics/slam_race.py).
+
+lifecycle:
+  pre_start: cleanup_hybrid
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_hybrid_conf
+    launch: sim_mvp_slam.launch.py
+    args:
+      world: forest_realistic_v2_trees_rocks.sdf
+      use_rviz: true
+      ekf_mode: local
+      paused: false
+      use_slam: false
+      lidar_mode: 3d
+      use_experimental_lidar3d: true
+      publish_map_odom_identity: false
+      start_navigation: false
+  - id: tree_slam
+    kind: slam
+    package: forest_tree_slam
+    launch: tree_slam.launch.py
+    args:
+      use_sim_time: true
+  - id: mapping
+    kind: mapping
+    package: forest_traversability_mapping
+    launch: traversability_mapping.launch.py
+    args:
+      use_sim_time: true
+  - id: nav2
+    kind: navigation
+    package: forest_nav2_bringup
+    launch: nav2_stack.launch.py
+    args:
+      use_sim_time: true
+      # MVP: conduzir mesmo com SLAM LOST (mundo plano/sem landmarks ou parado).
+      # Em produção volta a true (não navegar às cegas sem localização).
+      require_slam: false
+
+wait_nodes:
+  - ekf_local
+  - lidar3d_experimental_node
+  - tree_slam_node
+  - traversability_mapping_node
+  - mission_manager_node
+  - mission_nav2_bridge
+  - bt_navigator
+
+ui:
+  launch_hint: >-
+    Driver autónomo via Nav2. Costmap LOCAL (reativo) = nuvem
+    /perception/lidar3d/experimental/non_ground (PointCloud2) → ObstacleLayer.
+    Enviar goal: ros2 topic pub --once /mission/command ... (ou forest test goto),
+    sucesso em /planning/goal_reached. Corrida + avaliação: slam_race.py.

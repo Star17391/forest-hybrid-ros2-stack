@@ -12,6 +12,7 @@ export FOREST_DIAG_ROOT
 
 forest_diag_list() {
   cat <<'EOF'
+drive        Cadeia de nav autónoma: testa GOTO/PATROL e diz o ELO que falha (--x --y --patrol --timeout)
 imu          Launch diag_imu (Gazebo + bridge + sanitize)
 tf           TF diag: audit se sessão up; senão sim_gazebo (mesmo launch que up)
 tf-audit     TF publishers + tf2_echo (requer forest up / sim a correr)
@@ -39,6 +40,7 @@ hybrid-joints  Lagartas/pernas: joints Gazebo, joint_state, cmd_pos, ROS status
 tree-slam    Tree-SLAM: atribui o solavanco map->odom a camada (EKF/perceção/backend); auto-conduz (--duration, --no-drive)
 tree-slam-dbh  Tree-SLAM: estabilidade DBH multi-view por track (/slam/tree_map); auto-conduz (--world, --duration)
 slam-trajectory  GT (Gazebo) vs EKF-only vs Tree-SLAM: trajetórias + erro em PNG/CSV; auto-conduz (--duration, --out)
+vision-labels    Dataset de captura automática: contagem/taxa (--live) e desenho das boxes nas imagens (--render N) para revisão
 EOF
 }
 
@@ -46,6 +48,12 @@ forest_diag_run() {
   local name="${1:-}"
   shift || true
   case "$name" in
+    drive)
+      forest_source_ros || return 1
+      forest_log_section "diag drive — cadeia de navegação autónoma (onde falha?)"
+      echo "Requer sim: forest up sim-tree-slam-nav2 -d --world <mundo> --rviz_only"
+      exec python3 "${FOREST_DIAG_ROOT}/drive_chain_check.py" "$@"
+      ;;
     imu)
       forest_source_ros || return 1
       forest_log_section "diag imu — press PLAY in Gazebo"
@@ -169,6 +177,11 @@ forest_diag_run() {
       forest_log_section "diag slam-trajectory — GT vs EKF-only vs Tree-SLAM (gráficos PNG/CSV; auto-conduz)"
       echo "  Requer sim a correr: forest up sim-tree-slam -d --world <mundo>"
       exec python3 "${FOREST_DIAG_ROOT}/slam_trajectory_eval.py" "$@"
+      ;;
+    vision-labels|vision_labels)
+      forest_log_section "diag vision-labels — audit do dataset de captura automática YOLO"
+      echo "  Requer: forest up sim-vision-capture -d  (ou dataset já capturado)"
+      exec python3 "${FOREST_DIAG_ROOT}/vision_labels_audit.py" "$@"
       ;;
     ""|-h|--help|help|list)
       echo "forest diag <name> [args...]"

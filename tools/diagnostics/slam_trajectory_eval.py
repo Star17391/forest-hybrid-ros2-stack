@@ -53,6 +53,16 @@ CMD_VEL = "/forest_gen/cmd_vel"
 ROUTES = {
     "rugged-loop": [(0.0, 0.0), (5.6, 2.1), (-2.1, 5.6), (-5.6, -2.1),
                     (2.1, -5.6), (0.0, 0.0)],
+    # forest_realistic_v2_trees_rocks (55 árvores + 14 rochas + 12 arbustos + 2
+    # troncos caídos = 83 obstáculos, ~48x49 m). Laço pelos 4 quadrantes gerado por
+    # A* em grelha (tools .../tmp/generate_route.py), com folga mínima 1.68 m a
+    # TODOS os tipos de obstáculo (a rota antiga passava a 0.35 m de bush_2 → embate,
+    # porque o check só olhava árvores/rochas). Volta a (0,0) → deriva + loop closure.
+    "realistic-loop": [(0.0, 0.0), (1.6, 2.4), (3.6, 4.4), (5.6, 6.4), (3.2, 4.8),
+                       (0.4, 4.4), (-2.4, 4.4), (-5.2, 4.4), (-7.2, 6.4), (-7.2, 3.6),
+                       (-7.2, 0.8), (-7.2, -2.0), (-7.2, -4.8), (-6.4, -7.2), (-3.6, -7.2),
+                       (-1.6, -9.2), (1.2, -9.6), (3.6, -8.8), (6.4, -8.0), (4.0, -6.8),
+                       (2.4, -4.8), (2.4, -2.0), (0.4, 0.0), (0.0, 0.0)],
 }
 
 
@@ -69,18 +79,25 @@ def wrap(a: float) -> float:
 
 
 def load_world_landmarks(sdf_path):
-    """Lê (kind, name, x, y) de árvores e rochas do SDF do mundo."""
+    """Lê os obstáculos do SDF: árvores/rochas (via <include>) E arbustos/troncos
+    caídos (via <model>). Estes últimos são obstáculos FÍSICOS reais mas NÃO são
+    landmarks de SLAM — ainda assim a rota tem de os evitar (senão o robô embate).
+    Devolve (trees, rocks, bushes, logs), cada um lista de (name, x, y)."""
     import re
     from pathlib import Path
     txt = Path(sdf_path).read_text(errors="ignore")
-    blocks = re.findall(
-        r'<uri>model://(Tree\d|Rock\d)</uri>\s*<name>([^<]+)</name>\s*<pose>([^<]+)</pose>', txt)
     trees, rocks = [], []
-    for kind, name, pose in blocks:
+    for kind, name, pose in re.findall(
+        r'<uri>model://(Tree\d+|Rock\d+)</uri>\s*<name>([^<]+)</name>\s*<pose>([^<]+)</pose>', txt):
         pp = pose.split()
-        x, y = float(pp[0]), float(pp[1])
-        (trees if kind.startswith("Tree") else rocks).append((name, x, y))
-    return trees, rocks
+        (trees if kind.startswith("Tree") else rocks).append((name, float(pp[0]), float(pp[1])))
+    bushes, logs = [], []
+    for name, pose in re.findall(
+        r'<model name="(bush_\d+|fallen_log_\d+)">\s*<static>[^<]*</static>\s*<pose>([^<]+)</pose>',
+            txt):
+        pp = pose.split()
+        (logs if name.startswith("fallen") else bushes).append((name, float(pp[0]), float(pp[1])))
+    return trees, rocks, bushes, logs
 
 
 class TrajEval(Node):
@@ -102,10 +119,11 @@ class TrajEval(Node):
         self.lap_start_sample = [0]  # índice em s_gt onde cada volta começa
 
         # Landmarks do mundo (GT) e do SLAM, para o mapa.
-        self.world_trees, self.world_rocks = ([], [])
+        self.world_trees, self.world_rocks, self.world_bushes, self.world_logs = ([], [], [], [])
         if args.world_sdf:
             try:
-                self.world_trees, self.world_rocks = load_world_landmarks(args.world_sdf)
+                (self.world_trees, self.world_rocks,
+                 self.world_bushes, self.world_logs) = load_world_landmarks(args.world_sdf)
             except Exception as e:  # noqa: BLE001
                 print(f"AVISO: não li o SDF do mundo: {e}")
         self.slam_landmarks: list[tuple[int, float, float]] = []  # (semantic_class, x, y)
@@ -118,12 +136,23 @@ class TrajEval(Node):
         self.max_uid_seen = 0
 
         # Verifica que a rota não cruza obstáculos (folga mínima de cada segmento).
-        if self.route is not None and (self.world_trees or self.world_rocks):
-            pts = [(x, y) for _, x, y in self.world_trees + self.world_rocks]
+        # AGORA inclui arbustos e troncos caídos — não só árvores/rochas. Antes, um
+        # arbusto em cima da rota (bush_2 a 0.35 m) escapava ao check e o robô embatia.
+        all_obs = (self.world_trees + self.world_rocks + self.world_bushes + self.world_logs)
+        if self.route is not None and all_obs:
+            pts = [(x, y) for _, x, y in all_obs]
             mc = min(self._seg_clear(self.route[i], self.route[i + 1], pts)
                      for i in range(len(self.route) - 1))
-            print(f"[rota] folga mínima do percurso a árvores/rochas: {mc:.2f} m"
+            print(f"[rota] folga mínima a TODOS os obstáculos "
+                  f"(árvores/rochas/arbustos/troncos): {mc:.2f} m"
                   + ("  ⚠️ <1 m — risco de embate!" if mc < 1.0 else "  OK"))
+            # O controlador salta para o waypoint seguinte a `wp_tol` do vértice, logo
+            # corta cada canto até ~wp_tol POR DENTRO da rota. Se wp_tol ≥ folga, o
+            # corte come toda a margem e o robô embate no interior da curva.
+            if self.args.wp_tol >= mc:
+                print(f"[rota] ⚠️ wp_tol={self.args.wp_tol:.2f} m ≥ folga {mc:.2f} m: "
+                      f"o corte de canto excede a folga → EMBATE provável. "
+                      f"Reduz para --wp-tol {max(0.3, mc * 0.5):.1f} ou menos.")
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -359,6 +388,11 @@ class TrajEval(Node):
             idx = name.split("_")[-1]
             axm.annotate("R" + idx, (x, y), fontsize=6, color="black",
                          xytext=(2, 2), textcoords="offset points")
+        # Arbustos e troncos caídos: obstáculos FÍSICOS (a evitar), não landmarks SLAM.
+        for name, x, y in self.world_bushes:
+            axm.plot(x, y, "s", color="olive", ms=9, mec="k", mew=0.4)
+        for name, x, y in self.world_logs:
+            axm.plot(x, y, "P", color="saddlebrown", ms=11, mec="k", mew=0.4)
         # Landmarks que o SLAM detetou (em map ≈ mundo)
         for sem, x, y in self.slam_landmarks:
             mk = "x" if sem != 6 else "+"
@@ -381,6 +415,8 @@ class TrajEval(Node):
         handles = [
             Line2D([], [], marker="^", color="w", mfc="forestgreen", mec="k", ms=9, label="árvore GT (id)"),
             Line2D([], [], marker="o", color="w", mfc="dimgray", mec="k", ms=8, label="rocha GT (Rid)"),
+            Line2D([], [], marker="s", color="w", mfc="olive", mec="k", ms=9, label="arbusto (obstáculo)"),
+            Line2D([], [], marker="P", color="w", mfc="saddlebrown", mec="k", ms=10, label="tronco caído"),
             Line2D([], [], marker="x", color="red", ms=10, lw=0, label="tronco detetado (SLAM)"),
             Line2D([], [], marker="+", color="purple", ms=10, lw=0, label="rocha detetada (SLAM)"),
             Line2D([], [], color="k", lw=2, label="GT percorrido"),
@@ -409,7 +445,11 @@ def main() -> int:
     p.add_argument("--route", default=None, choices=list(ROUTES.keys()),
                    help="segue uma rota em loop por waypoints (ex.: rugged-loop)")
     p.add_argument("--laps", type=int, default=2, help="nº de voltas no modo --route")
-    p.add_argument("--wp-tol", type=float, default=1.8, help="raio de chegada ao waypoint [m]")
+    # 0.6 m: pequeno o suficiente para o corte de canto caber na folga das rotas
+    # (rugged ~3 m, realistic ~1.4 m) e o robô não embater. Antes 1.8 m > folga
+    # realistic (1.4 m) → embatia no interior das curvas. O controlador vira no
+    # sítio (yaw>0.4 rad) e alcança tolerâncias pequenas sem circular o waypoint.
+    p.add_argument("--wp-tol", type=float, default=0.6, help="raio de chegada ao waypoint [m]")
     p.add_argument("--world-sdf", default=None,
                    help="SDF do mundo p/ desenhar árvores/rochas identificadas no mapa")
     args = p.parse_args()

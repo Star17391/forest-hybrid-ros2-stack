@@ -151,6 +151,15 @@ _forest_completion() {
         COMPREPLY=( $(compgen -W "${FOREST_CLI_UP_OPTS}" -- "$cur") )
       fi
       ;;
+    capture)
+      if [[ "$prev" == "capture" || "$prev" == "--out" ]]; then
+        local worlds
+        worlds="$(_forest_worlds)"
+        COMPREPLY=( $(compgen -W "$worlds" -- "$cur") )
+      else
+        COMPREPLY=( $(compgen -W "${FOREST_CLI_CAPTURE_OPTS}" -- "$cur") )
+      fi
+      ;;
     *)
       COMPREPLY=()
       ;;

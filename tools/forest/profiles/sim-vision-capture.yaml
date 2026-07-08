@@ -1,0 +1,36 @@
+api_version: forest.dev/v1
+name: sim-vision-capture
+description: >
+  Sim + EKF + câmara frontal + auto-labeler GT (Gazebo).
+  Captura imagens com bounding boxes geradas automaticamente a partir das poses
+  reais do mundo. O labeler é agnóstico ao movimento: conduz o robô com uma
+  missão de waypoints planeada (camada de missões) para cobrir o mundo.
+
+lifecycle:
+  pre_start: cleanup_hybrid
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_hybrid_conf
+    launch: sim_mvp_slam.launch.py
+    args:
+      world: forest_realistic_v2_trees_rocks.sdf
+      use_rviz: true
+      ekf_mode: local
+      paused: false
+      use_slam: false
+      lidar_mode: 3d
+      use_experimental_lidar3d: false
+      use_legacy_lidar3d: false
+
+  - id: vision_capture
+    kind: node
+    package: forest_vision_detection
+    launch: auto_labeler.launch.py
+    args:
+      use_sim_time: "true"
+
+wait_nodes:
+  - ekf_local
+  - gz_auto_labeler

@@ -1,0 +1,74 @@
+api_version: forest.dev/v1
+name: sim-full
+description: >-
+  Stack completo de SOLO: sim (marble_hd2 = forest_tracked_robot_lidar3d, com
+  LiDAR 3D + camera_front) + EKF SE3 + perceção 3D experimental + Tree-SLAM
+  (autoridade map->odom) + traversability + Nav2 (driver autónomo) + fusão de
+  CÂMARA (yolo_detector → /perception/camera/detections, fundida no log-odds do
+  tracker). É o sim-tree-slam-nav2 + a camada da câmara, para validar a F4 ao
+  vivo (A/B com/sem câmara, bboxes no RViz via /perception/camera/detections_image).
+  NOTA: o robô híbrido (forest_hybrid_robot) NÃO entra aqui porque o seu
+  front_laser é planar (vertical samples=1) → sem nuvem 3D não há tree_landmarks
+  para o Tree-SLAM; precisaria de um LiDAR 3D no modelo ForestGen (tarefa à parte).
+
+lifecycle:
+  pre_start: cleanup_hybrid
+
+layers:
+  - id: sim
+    kind: sim
+    package: forest_hybrid_conf
+    launch: sim_mvp_slam.launch.py
+    args:
+      world: forest_realistic_v2_trees_rocks.sdf
+      use_rviz: true
+      ekf_mode: local
+      paused: false
+      use_slam: false
+      lidar_mode: 3d
+      use_experimental_lidar3d: true
+      publish_map_odom_identity: false
+      start_navigation: false
+  - id: tree_slam
+    kind: slam
+    package: forest_tree_slam
+    launch: tree_slam.launch.py
+    args:
+      use_sim_time: true
+  - id: vision
+    kind: node
+    package: forest_vision_detection
+    launch: yolo_detector.launch.py
+    args:
+      use_sim_time: true
+  - id: mapping
+    kind: mapping
+    package: forest_traversability_mapping
+    launch: traversability_mapping.launch.py
+    args:
+      use_sim_time: true
+  - id: nav2
+    kind: navigation
+    package: forest_nav2_bringup
+    launch: nav2_stack.launch.py
+    args:
+      use_sim_time: true
+      require_slam: false
+
+wait_nodes:
+  - ekf_local
+  - lidar3d_experimental_node
+  - tree_slam_node
+  - yolo_detector
+  - traversability_mapping_node
+  - mission_manager_node
+  - mission_nav2_bridge
+  - bt_navigator
+
+ui:
+  launch_hint: >-
+    Stack completo + câmara. Vês as bboxes no RViz: Image display →
+    /perception/camera/detections_image. Fusão de classe no log do tree_slam_node:
+    "[cam] projetados/associados/fundidos". A/B: relança com
+    -p fusion_camera_enabled:=false (baseline) vs true (fusão). YOLO corre com o
+    python do venv-ardupilot (ultralytics); sem ele o detetor fica idle.

@@ -24,6 +24,8 @@ source "${FOREST_ROOT}/lib/random_move.bash"
 source "${FOREST_ROOT}/lib/diag.bash"
 # shellcheck source=../lib/worlds.bash
 source "${FOREST_ROOT}/lib/worlds.bash"
+# shellcheck source=../lib/capture.bash
+source "${FOREST_ROOT}/lib/capture.bash"
 
 usage() {
   cat <<EOF
@@ -36,6 +38,7 @@ Usage:
   forest up <profile> [opts] Start profile (YAML, foreground by default)
                              --lidar2d | --lidar3d selects sim LiDAR model
   forest world list            List Gazebo worlds in FORESTGEN_PATH/worlds
+  forest capture <world> [N]   Capture até N imagens e fecha a sim (auto forest down)
   forest profile [list]      List available profiles (alias: forest profiles)
   forest profile validate <name>  Validate profile YAML
   forest panel               Open mission panel (stack must be running)
@@ -54,6 +57,7 @@ Options for up:
   --panel-only       Open panel only (stack already up)
   --headless         No RViz + detach (CI / servers)
   --no-rviz          Disable RViz only
+  --rviz-only        Gazebo server-only (gz sim -s, no GUI) + RViz (CPU win)
   --world NAME       Gazebo world (.sdf); Tab lists FORESTGEN worlds
   -w NAME            Alias for --world
   --trunk-slice      LiDAR 3D: trunk_method=slice (fatias+continuidade)
@@ -262,6 +266,9 @@ PY
         ;;
     esac
     ;;
+  capture)
+    forest_run_capture "$@"
+    ;;
   world)
     sub="${1:-list}"
     shift || true
@@ -308,6 +315,11 @@ PY
           detach=true
           ;;
         --no-rviz) export FOREST_LAUNCH_OVERRIDES="${FOREST_LAUNCH_OVERRIDES:+$FOREST_LAUNCH_OVERRIDES,}use_rviz:=false" ;;
+        --rviz-only|--rviz_only)
+          # Gazebo headless (gz sim -s, sem janela GUI) + RViz como único visualizador.
+          # Mata o processo `ruby` da GUI do Gazebo (render do mundo) — grande ganho de CPU.
+          export FOREST_LAUNCH_OVERRIDES="${FOREST_LAUNCH_OVERRIDES:+$FOREST_LAUNCH_OVERRIDES,}headless:=true,use_rviz:=true"
+          ;;
         --world|-w)
           shift
           forest_world_apply_override "${1:?--world requires a name}"
