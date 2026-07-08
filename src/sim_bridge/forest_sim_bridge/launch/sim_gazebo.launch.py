@@ -111,6 +111,7 @@ def _opaque_setup(context, *_args, **_kwargs):
     gz_res = f"{models_path}:{prev}" if prev else str(models_path)
 
     paused = LaunchConfiguration("paused").perform(context).lower() in ("1", "true", "yes")
+    headless = LaunchConfiguration("headless").perform(context).lower() in ("1", "true", "yes")
 
     cleanup = ExecuteProcess(
         cmd=["ros2", "run", "forest_sim_bridge", "forest_cleanup"],
@@ -140,9 +141,15 @@ def _opaque_setup(context, *_args, **_kwargs):
         }.items(),
     )
 
-    gz_args = ["gz", "sim", str(world_path)]
+    # -s = server-only (sem GUI do Gazebo). Mata o processo `ruby` da janela
+    # (render do mundo), o maior consumo de CPU a seguir à física. O RViz
+    # continua a visualizar tudo a partir dos tópicos. Ver `forest up --rviz-only`.
+    gz_args = ["gz", "sim"]
+    if headless:
+        gz_args.append("-s")
     if not paused:
-        gz_args = ["gz", "sim", "-r", str(world_path)]
+        gz_args.append("-r")
+    gz_args.append(str(world_path))
     gz = ExecuteProcess(
         cmd=gz_args,
         output="screen",
@@ -583,6 +590,11 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("world_path", default_value="",
                                   description="Absolute path to .sdf world (overrides 'world')"),
             DeclareLaunchArgument("paused", default_value="true"),
+            DeclareLaunchArgument(
+                "headless",
+                default_value="false",
+                description="true = gz sim -s (server-only, sem janela GUI; RViz visualiza)",
+            ),
             DeclareLaunchArgument("cleanup_first", default_value="true"),
             DeclareLaunchArgument("use_rviz", default_value="true"),
             DeclareLaunchArgument("rviz_config", default_value=""),

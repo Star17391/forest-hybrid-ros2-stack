@@ -55,6 +55,7 @@ def _setup(context, *_args, **_kwargs):
         launch_arguments={
             "world": LaunchConfiguration("world"),
             "paused": LaunchConfiguration("paused"),
+            "headless": LaunchConfiguration("headless"),
             "cleanup_first": LaunchConfiguration("cleanup_first"),
             "use_rviz": LaunchConfiguration("use_rviz"),
             "rviz_config": rviz_cfg,
@@ -98,6 +99,11 @@ def generate_launch_description() -> LaunchDescription:
             DeclareLaunchArgument("use_rviz", default_value="true"),
             DeclareLaunchArgument("world", default_value="mvp_empty_flat.sdf"),
             DeclareLaunchArgument("paused", default_value="true"),
+            DeclareLaunchArgument(
+                "headless",
+                default_value="false",
+                description="true = Gazebo server-only (gz sim -s, sem GUI); RViz visualiza",
+            ),
             DeclareLaunchArgument("cleanup_first", default_value="true"),
             DeclareLaunchArgument("ekf_mode", default_value="local"),
             DeclareLaunchArgument("rviz_delay_sec", default_value="8"),
