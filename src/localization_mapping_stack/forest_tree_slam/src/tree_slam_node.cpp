@@ -52,6 +52,7 @@
 #include "forest_tree_slam/mode_manager.hpp"
 #include "forest_tree_slam/relocalizer.hpp"
 #include "forest_tree_slam/se2_geometry.hpp"
+#include "forest_tree_slam/tile_map.hpp"
 #include "forest_tree_slam/tracker.hpp"
 
 namespace forest_tree_slam
@@ -141,6 +142,13 @@ public:
     relocalization_max_scans_per_attempt_ =
       declare_parameter<int>("relocalization_max_scans_per_attempt", 10);
     diagnostics_ = declare_parameter<bool>("diagnostics", false);
+
+    // Tiles fixos (FUTURE_TILED_MAPS.md): tile_size ≈ 2× alcance fiável do LiDAR
+    // (~10 m → 20 m). O tile é índice derivado da posição otimizada do backend;
+    // re-bucketa a cada scan (cobre loop closure). Raio ativo = alcance + margem.
+    const double tile_size_m = declare_parameter<double>("tile_size_m", 20.0);
+    tile_active_radius_m_ = declare_parameter<double>("tile_active_radius_m", 16.0);
+    landmark_tiles_ = std::make_unique<LandmarkTileMap>(tile_size_m);
 
     Eigen::Vector3d hop_sigma(
       declare_parameter<double>("aerial_hop_sigma_x", 3.0),
@@ -844,6 +852,23 @@ private:
         backend_positions.emplace(uid, backend_->landmark_position(uid));
       }
       tracker_->sync_landmark_anchors(backend_positions);
+
+      // Tiles: bucketa cada landmark do grafo pelo tile da posição OTIMIZADA.
+      // Corre a cada scan (depois de qualquer optimize()), logo cobre também o
+      // loop closure: se a correção atravessar uma fronteira de tile, o uid
+      // re-bucketa aqui — a identidade nunca muda, só a arrumação.
+      std::size_t tiles_moved = 0;
+      for (const auto & kv : backend_positions) {
+        if (landmark_tiles_->assign(kv.first, kv.second)) {
+          ++tiles_moved;
+        }
+      }
+      if (tiles_moved > 0) {
+        tile_rebuckets_total_ += tiles_moved;
+        RCLCPP_DEBUG(
+          get_logger(), "tiles: %zu landmark(s) re-bucketados (total acumulado %zu, tiles ocupados %zu)",
+          tiles_moved, tile_rebuckets_total_, landmark_tiles_->n_tiles());
+      }
     }
 
     // Fase 1 — alinhamento de constelação local. Estima `T` (deriva incremental)
@@ -1491,6 +1516,66 @@ private:
     }
     markers.markers.push_back(trajectory);
 
+    // Grelha de TILES: contorno de cada tile ocupado (LINE_LIST) + etiqueta
+    // "(r,c) n=<landmarks>" no centro. Vê-se a partição fixa do mundo e a que
+    // tile cada zona do mapa pertence; no loop closure os landmarks re-bucketam
+    // mas a grelha (fixa por coordenadas) não se mexe.
+    {
+      const auto & grid = landmark_tiles_->grid();
+      visualization_msgs::msg::Marker outlines;
+      outlines.header.stamp = now();
+      outlines.header.frame_id = map_frame_;
+      outlines.ns = "tree_slam_tiles";
+      outlines.id = 0;
+      outlines.type = visualization_msgs::msg::Marker::LINE_LIST;
+      outlines.action = visualization_msgs::msg::Marker::ADD;
+      outlines.scale.x = 0.04;
+      outlines.color.r = 0.9F;
+      outlines.color.g = 0.5F;
+      outlines.color.b = 0.1F;
+      outlines.color.a = 0.6F;
+      outlines.pose.orientation.w = 1.0;
+      int label_id = 1;
+      for (const TileIndex & t : landmark_tiles_->occupied_tiles()) {
+        Eigen::Vector2d mn, mx;
+        grid.bounds_of(t, mn, mx);
+        const std::array<std::array<double, 2>, 4> corners{{
+          {mn.x(), mn.y()}, {mx.x(), mn.y()}, {mx.x(), mx.y()}, {mn.x(), mx.y()}}};
+        for (int k = 0; k < 4; ++k) {
+          geometry_msgs::msg::Point a, b;
+          a.x = corners[static_cast<std::size_t>(k)][0];
+          a.y = corners[static_cast<std::size_t>(k)][1];
+          b.x = corners[static_cast<std::size_t>((k + 1) % 4)][0];
+          b.y = corners[static_cast<std::size_t>((k + 1) % 4)][1];
+          outlines.points.push_back(a);
+          outlines.points.push_back(b);
+        }
+        visualization_msgs::msg::Marker label;
+        label.header.stamp = now();
+        label.header.frame_id = map_frame_;
+        label.ns = "tree_slam_tiles";
+        label.id = label_id++;
+        label.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+        label.action = visualization_msgs::msg::Marker::ADD;
+        const Eigen::Vector2d c = grid.center_of(t);
+        label.pose.position.x = c.x();
+        label.pose.position.y = c.y();
+        label.pose.position.z = 0.2;
+        label.pose.orientation.w = 1.0;
+        label.scale.z = 0.5;
+        label.color.r = 0.9F;
+        label.color.g = 0.5F;
+        label.color.b = 0.1F;
+        label.color.a = 0.9F;
+        label.text = "(" + std::to_string(t.r) + "," + std::to_string(t.c) + ") n=" +
+          std::to_string(landmark_tiles_->uids_in(t).size());
+        markers.markers.push_back(label);
+      }
+      if (!outlines.points.empty()) {
+        markers.markers.push_back(outlines);
+      }
+    }
+
     pub_pose_graph_->publish(markers);
   }
 
@@ -1597,6 +1682,10 @@ private:
   // --- Estado -----------------------------------------------------------
   std::unique_ptr<TreeSlamBackend> backend_;
   std::unique_ptr<LandmarkTracker> tracker_;
+  // Tiles fixos: bucketing uid->tile derivado da posição otimizada do backend.
+  std::unique_ptr<LandmarkTileMap> landmark_tiles_;
+  double tile_active_radius_m_{16.0};
+  std::size_t tile_rebuckets_total_{0};
   std::unique_ptr<TreeLocRelocalizer> relocalizer_;
   std::unique_ptr<TreeLocRelocalizer> local_align_reloc_;  // Fase 1: alinhamento por-scan
   std::unique_ptr<TreeLocRelocalizer> loop_closure_reloc_;  // loop closure global no solo
