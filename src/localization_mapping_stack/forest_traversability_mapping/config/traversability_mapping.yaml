@@ -1,7 +1,10 @@
 traversability_mapping_node:
   ros__parameters:
-    # Frame da grelha. `odom` permite acumulacao local sem saltos de map->odom.
-    map_frame: odom
+    # Frame da grelha. `map` (o do SLAM corrigido) — a camada VIVE no frame do
+    # Tree-SLAM via TF map->base, para o mapa nao derivar com a odometria. Antes era
+    # `odom` (provisorio, pre-SLAM): o grid inteiro deslizava com a deriva das rodas e
+    # os obstaculos (do /slam/tree_map, em `map`) apareciam deslocados por map->odom.
+    map_frame: map
     base_frame: marble_hd2/base_link
     cost_layer: cost
 
@@ -26,11 +29,10 @@ traversability_mapping_node:
     slope_cost_max_deg: 25.0   # declive que satura o custo em 1.0
     step_obstacle_m: 0.35      # salto de altura na vizinhanca > isto => buraco/degrau (custo 1)
 
-    # --- Sprint 1B: troncos como cilindros (de /perception/lidar/tree_landmarks) ---
+    # --- Obstaculos: dos landmarks COMPROMETIDOS do SLAM (/slam/tree_map) ---
+    # Custo UNIFORME letal por obstaculo (nada deformavel para atravessar). A fonte
+    # per-frame stateless (/perception/lidar/tree_landmarks) foi REMOVIDA: efemera e em
+    # frame de odom. O mapa de obstaculos vem so do SLAM (persistente, corrigido).
     enable_obstacle_cost: true
-    tree_landmarks_topic: /perception/lidar/tree_landmarks
-    trunk_margin_m: 0.30       # margem larga fixa em redor do tronco (Sprint 3 estreita)
+    trunk_margin_m: 0.30       # margem dura em redor do landmark (zona de custo 1.0)
     obstacle_inflation_m: 0.40 # inflacao suave (custo decresce ate 0)
-    obstacle_ttl_sec: 2.0      # esquece primitiva nao revista ha mais de X s
-    dedup_dist_m: 0.30         # funde deteccoes a < X m (evita duplicados por-frame)
-    min_trunk_confidence: 0.0  # ignora troncos abaixo desta confianca
