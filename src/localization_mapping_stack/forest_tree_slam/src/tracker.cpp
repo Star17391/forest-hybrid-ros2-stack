@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 
 #include "forest_3d_perception/landmark_class_scorer.hpp"
@@ -18,6 +20,14 @@ double clamp_prob(float p, float eps)
   return std::clamp(static_cast<double>(p), static_cast<double>(eps),
         1.0 - static_cast<double>(eps));
 }
+
+// Committed no grafo = promovido E classe de grafo (tronco/rocha). É o conjunto
+// cuja POSIÇÃO passa a ser propriedade exclusiva do backend (unificação dos
+// mapas). Obstáculos e candidatos ficam de fora (front-end).
+bool is_committed_graph(const LandmarkTrack & t)
+{
+  return LandmarkTracker::is_promoted(t) && is_slam_graph_class(t.committed_class);
+}
 }  // namespace
 
 Eigen::Vector3d LandmarkTracker::class_posterior(const LandmarkTrack & track)
@@ -31,9 +41,62 @@ Eigen::Vector3d LandmarkTracker::class_posterior(const LandmarkTrack & track)
   return expv / sum;
 }
 
+Eigen::Vector3d LandmarkTracker::class_posterior_fused(const LandmarkTrack & track) const
+{
+  // Sem evidência de câmara → idêntico ao LiDAR (kill-switch exato: nem o cap atua).
+  if (track.class_logodds_cam.isZero(0.0)) {
+    return class_posterior(track);
+  }
+  const Eigen::Vector3d lidar = class_posterior(track);
+
+  // Cap: limita a componente máxima do LiDAR a `c` e redistribui o excedente pelas
+  // outras (proporcional à sua massa) — deixa "espaço" para a câmara cruzar o
+  // limiar de promoção, em vez de o LiDAR saturar sozinho perto de 1.
+  const double c = params_.fusion_class_c_lidar;
+  Eigen::Vector3d capped = lidar;
+  Eigen::Index mx = 0;
+  const double maxv = lidar.maxCoeff(&mx);
+  if (c > 0.0 && c < 1.0 && maxv > c) {
+    const double excess = maxv - c;
+    capped[mx] = c;
+    const double others = 1.0 - maxv;  // massa total das restantes componentes
+    for (Eigen::Index i = 0; i < 3; ++i) {
+      if (i == mx) {
+        continue;
+      }
+      capped[i] += others > 1e-9 ? excess * (lidar[i] / others) : excess * 0.5;
+    }
+  }
+
+  // Combina com a câmara em log-odds: softmax(log(capped) + logodds_cam).
+  Eigen::Vector3d logits;
+  for (Eigen::Index i = 0; i < 3; ++i) {
+    logits[i] = std::log(std::max(capped[i], 1e-9)) + track.class_logodds_cam[i];
+  }
+  const double m = logits.maxCoeff();
+  Eigen::Vector3d expv = (logits.array() - m).exp();
+  const double sum = expv.sum();
+  if (sum < 1e-12) {
+    return Eigen::Vector3d::Constant(1.0 / 3.0);
+  }
+  return expv / sum;
+}
+
 bool LandmarkTracker::is_promoted(const LandmarkTrack & track)
 {
   return is_promoted_class(track.committed_class);
+}
+
+bool LandmarkTracker::is_confirmed(const LandmarkTrack & track) const
+{
+  if (!is_promoted(track)) {
+    return false;
+  }
+  // Nº de ângulos (bins de bearing) distintos de onde o tronco foi observado.
+  const int n_parallax_bins =
+    static_cast<int>(__builtin_popcount(track.parallax_bins));
+  return n_parallax_bins >= params_.promote_min_parallax_bins &&
+         track.score >= params_.promote_score_min;
 }
 
 bool LandmarkTracker::has_class_scores(const TreeDetection & d)
@@ -88,6 +151,71 @@ void LandmarkTracker::accumulate_class_scores(
   }
 }
 
+void LandmarkTracker::fuse_camera_class(
+  LandmarkUid uid, int class_idx, double conf, double bearing_rad)
+{
+  if (class_idx < 0 || class_idx >= 3) {
+    return;
+  }
+  if (conf < params_.fusion_class_cam_min_conf) {
+    return;  // deteção de câmara fraca: ignora
+  }
+  for (auto & track : tracks_) {
+    if (track.uid != uid) {
+      continue;
+    }
+    // Anti-correlação: não deixar a câmara "encher" o log-odds parada (mesma vista),
+    // tal como o LiDAR. Só acumula se a direção do landmark mudou o suficiente.
+    if (!std::isnan(track.last_cam_bearing_rad)) {
+      const double delta = std::abs(wrap_angle(bearing_rad - track.last_cam_bearing_rad));
+      if (delta < params_.class_min_bearing_delta_rad) {
+        return;
+      }
+    }
+    const double q = std::clamp(conf, 1.0e-3, 1.0 - 1.0e-3);
+    const double logit = std::log(q / (1.0 - q));
+    track.class_logodds_cam[class_idx] += params_.fusion_class_w_cam * logit;
+    track.last_cam_bearing_rad = bearing_rad;
+    try_promote(track);  // a câmara pode cruzar o limiar de promoção mais cedo
+    return;
+  }
+}
+
+std::uint32_t LandmarkTracker::bearing_bin_mask(
+  const Eigen::Vector2d & landmark_xy, const Eigen::Vector2d & robot_xy) const
+{
+  const int nbins = std::clamp(params_.parallax_bin_count, 1, 32);
+  const double bearing = std::atan2(
+    robot_xy.y() - landmark_xy.y(), robot_xy.x() - landmark_xy.x());  // tronco→robô
+  int bin = static_cast<int>(std::floor((bearing + M_PI) / (2.0 * M_PI) * nbins));
+  bin = ((bin % nbins) + nbins) % nbins;  // wrap [0, nbins)
+  return 1u << bin;
+}
+
+void LandmarkTracker::update_score(
+  LandmarkTrack & t, const TreeDetection & d, const Eigen::Vector2d & robot_xy) const
+{
+  // novidade = ver de um ÂNGULO novo (paralaxe). Robô parado → mesmo bin → ~0.1.
+  const std::uint32_t mask = bearing_bin_mask(t.xy, robot_xy);
+  const bool new_bin = !(t.parallax_bins & mask);
+  const double novelty = new_bin ? 1.0 : params_.score_novelty_repeat;
+
+  // consistência = a obs bate na estimativa atual? (resíduo ANTES do fuse)
+  const double residual = (Eigen::Vector2d(d.x, d.y) - t.xy).norm();
+  const double consistency =
+    std::exp(-residual / std::max(1e-3, params_.score_consistency_sigma_m));
+
+  const double quality = std::clamp(static_cast<double>(d.confidence), 0.0, 1.0);
+  const double credit = quality * novelty * consistency;
+
+  t.score += params_.score_gain * credit * (1.0 - t.score);  // cresce devagar até 1
+  if (residual > params_.score_inconsistent_residual_m) {
+    t.score -= params_.score_penalty;  // posição ainda incerta → desce
+  }
+  t.score = std::clamp(t.score, 0.0, 1.0);
+  t.parallax_bins |= mask;
+}
+
 void LandmarkTracker::try_promote(LandmarkTrack & track) const
 {
   if (track.committed_class != kCommittedUnknown) {
@@ -96,8 +224,12 @@ void LandmarkTracker::try_promote(LandmarkTrack & track) const
   if (track.n_observations < params_.promote_min_obs) {
     return;
   }
+  // NOTA: promoção = inclusão no BACKEND (fatores que constrangem a pose) → tem de
+  // ser FROUXA (n_obs + classe), senão o backend esfomeia e a pose deriva. O gate
+  // S + paralaxe NÃO entra aqui; ele decide a CONFIRMAÇÃO (verde/inventário) a
+  // jusante (ver is_confirmed()). Separação existência/localização.
 
-  const Eigen::Vector3d posterior = class_posterior(track);
+  const Eigen::Vector3d posterior = class_posterior_fused(track);
   Eigen::Index best = 0;
   Eigen::Index second = 1;
   if (posterior[second] > posterior[best]) {
@@ -124,6 +256,7 @@ void LandmarkTracker::try_promote(LandmarkTrack & track) const
 void LandmarkTracker::merge_class_state(LandmarkTrack & kept, const LandmarkTrack & removed) const
 {
   kept.class_logodds += removed.class_logodds;
+  kept.class_logodds_cam += removed.class_logodds_cam;
   kept.class_coverage_bits |= removed.class_coverage_bits;
   kept.last_multiview_class_coverage_ =
     std::max(kept.last_multiview_class_coverage_, removed.last_multiview_class_coverage_);
@@ -170,6 +303,16 @@ void LandmarkTracker::fuse_position(LandmarkTrack & t, const TreeDetection & d) 
   const Eigen::Vector2d z(d.x, d.y);
   t.xy = post_cov * (prior_prec * t.xy + det_prec * z);
   t.cov = post_cov;
+}
+
+void LandmarkTracker::fuse_position_covariance_only(
+  LandmarkTrack & t, const TreeDetection & d) const
+{
+  // Só a covariância (gate). A média (t.xy) é do backend — ver sync_landmark_anchors.
+  const Eigen::Matrix2d det_cov = detection_covariance(d);
+  const Eigen::Matrix2d prior_prec = t.cov.inverse();
+  const Eigen::Matrix2d det_prec = det_cov.inverse();
+  t.cov = (prior_prec + det_prec).inverse();
 }
 
 void LandmarkTracker::fuse_diameter(LandmarkTrack & t, const TreeDetection & d) const
@@ -262,10 +405,25 @@ TrackerUpdateReport LandmarkTracker::update(
       t.dormant = false;
       report.reawakened.push_back(t.uid);
     }
-    fuse_position(t, d);
+
+    // --- SCORER DINÂMICO (antes do fuse: resíduo vs estimativa ATUAL) --------
+    update_score(t, d, robot_xy);
+
+    // UNIFICAÇÃO DOS MAPAS: o committed no grafo tem a POSIÇÃO como propriedade do
+    // backend (sync_landmark_anchors ancora-a a cada scan). O tracker não a filtra
+    // — evita a autoridade dupla que gerava duplicados/fantasmas. Só atualiza a
+    // covariância para o gate. Candidatos (ainda fora do grafo) filtram normalmente.
+    if (is_committed_graph(t)) {
+      fuse_position_covariance_only(t, d);
+    } else {
+      fuse_position(t, d);
+    }
     fuse_diameter(t, d);
     accumulate_class_scores(t, d, robot_xy);
-    t.confidence = std::min(1.0, t.confidence + params_.confidence_gain);
+    // Confiança de qualidade (EMA) — mantida como sinal interno; a confiança
+    // PUBLICADA e o gate de promoção são agora o `score` (S) acima.
+    t.confidence = (1.0 - params_.confidence_gain) * t.confidence +
+                   params_.confidence_gain * d.confidence;
     t.n_observations++;
     try_promote(t);
     t.scans_since_seen = 0;
@@ -289,6 +447,12 @@ TrackerUpdateReport LandmarkTracker::update(
     if (d.confidence < params_.birth_confidence) {
       continue;
     }
+    // Gate de ALCANCE no nascimento: longe, o bearing×range e a deteção de tronco
+    // degradam → fantasmas. Além de birth_max_range_m não CRIA landmark (mas uma
+    // deteção longe ainda pôde ATUALIZAR um landmark existente acima, na associação).
+    if ((Eigen::Vector2d(d.x, d.y) - robot_xy).norm() > params_.birth_max_range_m) {
+      continue;
+    }
     LandmarkTrack t;
     t.uid = next_uid_++;
     t.xy = Eigen::Vector2d(d.x, d.y);
@@ -296,6 +460,10 @@ TrackerUpdateReport LandmarkTracker::update(
     t.cov = detection_covariance(d);
     t.diameter_var = detection_diameter_variance(d);
     t.confidence = d.confidence;
+    // Nasce com S=0 (uma só vista não dá fiabilidade); regista o 1.º ângulo de
+    // paralaxe. S cresce devagar nas associações seguintes (vistas novas).
+    t.score = 0.0;
+    t.parallax_bins = bearing_bin_mask(t.xy, robot_xy);
     t.n_observations = 1;
     t.scans_since_seen = 0;
     t.last_seen_stamp_sec = stamp_sec;
@@ -417,11 +585,14 @@ void LandmarkTracker::geometric_reassociate(
       ++n_dormant;
     }
   }
-  // Sem landmarks adormecidos não há regresso a mapear — poupa o custo (o
-  // gate de posição já trata o caso de tracking contínuo).
-  if (n_dormant == 0 ||
-    static_cast<int>(map_points.size()) < params_.ground_reloc.min_correspondences)
-  {
+  // Associação inter-troncos como via PRIMÁRIA (não só fallback de adormecidos):
+  // corre sempre que há mapa suficiente e deteções por associar. Um landmark
+  // ATIVO cuja deteção derivou para fora do gate de posição é re-associado por
+  // geometria de vizinhança (constelação/triângulos, robusta à deriva) em vez de
+  // gerar um duplicado — que o loop closure não desfaz. (n_dormant fica só para
+  // diagnóstico.) O early-return `n_unmatched == 0` acima evita o custo quando o
+  // gate de posição já casou tudo (tracking contínuo sem deriva).
+  if (static_cast<int>(map_points.size()) < params_.ground_reloc.min_correspondences) {
     return;
   }
 
@@ -435,6 +606,14 @@ void LandmarkTracker::geometric_reassociate(
   }
 
   const auto result = ground_relocalizer_.relocalize(query, map_points);
+  if (std::getenv("FOREST_GEO_DEBUG")) {
+    std::fprintf(
+      stderr,
+      "[geo] dets=%d unmatched=%d dormant=%zu map=%zu -> accepted=%d overlap=%.2f "
+      "inliers=%zu residual=%.2f\n",
+      n_dets, n_unmatched, n_dormant, map_points.size(), result.accepted ? 1 : 0,
+      result.overlap_ratio, result.correspondences.size(), result.mean_residual_m);
+  }
   if (!result.accepted) {
     return;
   }
@@ -472,7 +651,11 @@ void LandmarkTracker::geometric_reassociate(
     // e classe são invariantes ao frame, logo fundem-se com segurança.
     fuse_diameter(t, d);
     accumulate_class_scores(t, d, robot_xy);
-    t.confidence = std::min(1.0, t.confidence + params_.confidence_gain);
+    // Confiança = média móvel (EMA) da QUALIDADE das deteções, não rampa por
+    // contagem (que saturava tudo a 1.0). Um landmark visto muitas vezes com
+    // deteções fracas (longe/arco parcial/sem base) mantém confiança baixa.
+    t.confidence = (1.0 - params_.confidence_gain) * t.confidence +
+                   params_.confidence_gain * d.confidence;
     t.n_observations++;
     t.scans_since_seen = 0;
     t.last_seen_stamp_sec = stamp_sec;
@@ -485,20 +668,19 @@ void LandmarkTracker::sync_landmark_anchors(
   const std::unordered_map<LandmarkUid, Eigen::Vector2d> & backend_positions)
 {
   for (auto & t : tracks_) {
-    // SÓ adormecidos. Os ativos estão a ser observados agora e a sua fusão
-    // própria (filtro de informação) é mais suave que a estimativa do backend,
-    // que no arranque (grafo mal condicionado) salta — sincronizá-los injeta
-    // ruído no gate e desestabiliza a associação cedo (regressão medida). Os
-    // adormecidos, esses, têm a posição congelada e desatualizada: é exatamente
-    // a eles que o frame consistente do backend faz falta para reativar.
-    if (!t.dormant || !is_promoted(t) || !is_slam_graph_class(t.committed_class)) {
+    // UNIFICAÇÃO DOS MAPAS: o backend é a autoridade da posição de TODOS os
+    // committed no grafo — ativos E adormecidos. Antes só se sincronizavam os
+    // adormecidos e os ativos mantinham uma estimativa filtrada própria que
+    // derivava da do grafo (autoridade dupla → duplicados/fantasmas no RViz).
+    // Agora o tracker não filtra a posição dos committed (ver update()), logo não
+    // há estimativa concorrente a proteger; a covariância continua a alimentar o
+    // gate (predição + fuse_position_covariance_only), aplicada sobre a posição
+    // correta do grafo.
+    if (!is_promoted(t) || !is_slam_graph_class(t.committed_class)) {
       continue;
     }
     const auto it = backend_positions.find(t.uid);
     if (it != backend_positions.end()) {
-      // Backend é a autoridade da posição dos adormecidos (frame consistente).
-      // A covariância congelada mantém-se — define a largura do gate, agora
-      // aplicada no sítio certo (posição corrigida por loop closure).
       t.xy = it->second;
     }
   }

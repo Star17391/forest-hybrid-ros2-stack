@@ -73,6 +73,33 @@ TEST(Backend, BearingRangeObservationsConvergeLandmarkToTruePosition)
   EXPECT_NEAR((est - true_landmark).norm(), 0.0, 1e-2);
 }
 
+// Fase 3: o prior de posição da nuvem multi-vista deve dominar uma triangulação
+// bearing×range ruidosa (mal-condicionada a longa distância) e puxar o landmark
+// para a posição da nuvem.
+TEST(Backend, MultiviewPositionPriorDominatesNoisyBearingRange)
+{
+  TreeSlamBackend backend;
+  backend.initialize(Pose2{0, 0, 0});
+
+  // Landmark longe (12 m), observado de uma única pose com bearing×range — a
+  // posição triangulada é frouxa. Sem mais vistas, fica perto do guess inicial.
+  const Eigen::Vector2d true_landmark(12.0, 0.0);
+  double b, r;
+  bearing_range(Pose2{0, 0, 0}, true_landmark, b, r);
+  // Guess inicial deslocado 1.5 m (como um bearing×range ruidoso a 12 m).
+  backend.add_tree_observation(7, 0, b, r, true_landmark + Eigen::Vector2d(1.2, 0.9));
+  backend.optimize();
+  const Eigen::Vector2d before = backend.landmark_position(7);
+
+  // A nuvem multi-vista dá a posição verdadeira com cov pequena → prior forte.
+  backend.add_landmark_position_prior(7, true_landmark, Eigen::Vector2d(0.08, 0.08));
+  backend.optimize();
+  const Eigen::Vector2d after = backend.landmark_position(7);
+
+  EXPECT_LT((after - true_landmark).norm(), (before - true_landmark).norm());
+  EXPECT_NEAR((after - true_landmark).norm(), 0.0, 0.15);
+}
+
 // Gate (a) do design: ATE 2D vs GT melhor que só-EKF (sem loop). Simula um
 // odom com bias sistemático (drift) e confirma que as observações de tronco
 // corrigem a trajetória para mais perto da verdade-terreno do que o odom puro.
@@ -162,6 +189,42 @@ TEST(Backend, RobustKernelLimitsOutlierDragVsGaussian)
   EXPECT_LT(shift_robust, 0.1) << "Huber: outlier atenuado, desloca " << shift_robust << " m";
   // E claramente melhor que o Gaussiano.
   EXPECT_LT(shift_robust, shift_gauss * 0.5);
+}
+
+// Cov POR-MEDIÇÃO: o nó passa agora range_sigma dependente do alcance (antes
+// deitava a cov fora e o backend usava sempre 15 cm fixos). Prova que o canal
+// funciona: uma observação longe ruidosa injetada com sigma GRANDE arrasta menos
+// a pose/landmark do que a MESMA observação injetada com sigma pequeno (otimista).
+TEST(Backend, PerMeasurementRangeSigmaAttenuatesNoisyObservation)
+{
+  auto landmark_shift_with = [](double range_sigma) {
+      TreeSlamBackend backend;
+      backend.initialize(Pose2{0, 0, 0});
+      const Eigen::Vector2d true_lm(3.0, 0.0);
+      double b, r;
+      // 3 observações consistentes e próximas fixam o landmark.
+      bearing_range(Pose2{0, 0, 0}, true_lm, b, r);
+      backend.add_tree_observation(5, 0, b, r, true_lm, 0.05, 0.10);
+      for (int i = 1; i <= 2; ++i) {
+        backend.add_odom_keyframe(Pose2{1.0, 0.0, 0.0});
+        bearing_range(Pose2{static_cast<double>(i), 0, 0}, true_lm, b, r);
+        backend.add_tree_observation(5, static_cast<std::size_t>(i), b, r, true_lm, 0.05, 0.10);
+      }
+      backend.optimize();
+      const Eigen::Vector2d before = backend.landmark_position(5);
+      // Observação RUIDOSA do mesmo landmark (deslocada 1 m no alcance) injetada
+      // com o sigma de alcance dado.
+      backend.add_tree_observation(
+        5, backend.n_keyframes() - 1, b, r + 1.0, true_lm, 0.05, range_sigma);
+      backend.optimize();
+      return (backend.landmark_position(5) - before).norm();
+    };
+
+  const double shift_tight = landmark_shift_with(0.10);  // sigma otimista
+  const double shift_loose = landmark_shift_with(0.60);  // sigma realista p/ longe
+  EXPECT_LT(shift_loose, shift_tight)
+    << "sigma grande devia atenuar a observação ruidosa (loose=" << shift_loose
+    << " tight=" << shift_tight << ")";
 }
 
 // Gate (c): após a aresta SE2 do salto (com prior errado/grande incerteza),

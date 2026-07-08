@@ -17,6 +17,7 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(forest_hybrid_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(vision_msgs REQUIRED)
 find_package(forest_3d_perception REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(GTSAM REQUIRED)
@@ -48,7 +49,7 @@ target_link_libraries(tree_slam_core PUBLIC
 add_executable(tree_slam_node src/tree_slam_node.cpp)
 target_link_libraries(tree_slam_node tree_slam_core)
 ament_target_dependencies(tree_slam_node
-  rclcpp geometry_msgs nav_msgs visualization_msgs sensor_msgs tf2 tf2_ros
+  rclcpp geometry_msgs nav_msgs visualization_msgs sensor_msgs vision_msgs tf2 tf2_ros
   tf2_geometry_msgs forest_hybrid_msgs
 )
 
@@ -69,6 +70,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_relocalizer test/test_relocalizer.cpp)
   target_link_libraries(test_relocalizer tree_slam_core)
 
+  ament_add_gtest(test_camera_projection test/test_camera_projection.cpp)
+  target_link_libraries(test_camera_projection tree_slam_core)
+
   ament_add_gtest(test_mode_manager test/test_mode_manager.cpp)
   target_link_libraries(test_mode_manager tree_slam_core)
 
@@ -81,6 +85,10 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_node_glue test/test_node_glue.cpp)
   target_link_libraries(test_node_glue tree_slam_core)
+
+  # Unificação dos mapas: posição dos committed = backend; front-end só candidatos.
+  ament_add_gtest(test_map_unification test/test_map_unification.cpp)
+  target_link_libraries(test_map_unification tree_slam_core)
 endif()
 
 ament_package()

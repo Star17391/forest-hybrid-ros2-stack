@@ -6,15 +6,80 @@ tree_slam_node:
     publish_hz: 10.0
     gnss_good_variance_m2: 4.0
     relocalization_max_scans_per_attempt: 10
+    diagnostics: false  # liga p/ logar [diag] kf_wobble/odom_step
     aerial_hop_sigma_x: 3.0
     aerial_hop_sigma_y: 3.0
     aerial_hop_sigma_theta: 0.3
     relocalizer_diameter_bin_max_m: 1.5
 
+    # --- Backend GTSAM (antes eram defaults hardcoded em backend.hpp, agora
+    #     afináveis para varrimento A/B sem recompilar) ---
+    backend_keyframe_distance_m: 0.75
+    backend_keyframe_angle_rad: 0.35
+    backend_prior_sigma_xy: 0.10
+    backend_prior_sigma_theta: 0.05
+    # default_odom_sigma só é usado quando use_motion_odom_sigma=false.
+    backend_odom_sigma_xy: 0.05
+    backend_odom_sigma_theta: 0.03
+    backend_bearing_sigma_rad: 0.05
+    backend_range_sigma_m: 0.15
+    backend_constellation_sigma_m: 0.10
+    backend_use_robust_kernels: true
+    backend_robust_huber_k: 1.345
+
+    # --- Ruído de odom PROPORCIONAL AO MOVIMENTO (o nó deixava de passar cov e
+    #     o backend caía no sigma fixo de 5 cm; em terreno irregular isto faria
+    #     o backend confiar cego na odom e ignorar a correção dos troncos) ---
+    # MEDIDO (replay slam_loop_forest_flat_trees, 5 runs A/B): em terreno PLANO a
+    # odom é genuinamente boa (sigma ótimo ≤0.05); QUALQUER afrouxamento proporcional
+    # PIORA o RMSE (baseline 0.33 m → 0.54-0.59 m) e cria duplicados. Por isso está
+    # DESLIGADO por default. LIGAR só em terreno IRREGULAR (forest_realistic_v2_*),
+    # onde a odom derrapa >5 cm/keyframe e o modelo proporcional compensa. A
+    # calibração (per_trans/per_rot) tem de ser afinada NESSE cenário, não no plano.
+    use_motion_odom_sigma: false
+    odom_sigma_base_xy: 0.05      # piso (m) mesmo parado
+    odom_sigma_per_trans: 0.15    # m de incerteza por m percorrido (15%)
+    odom_sigma_per_rot_xy: 0.10   # m de incerteza por rad rodado
+    odom_sigma_base_theta: 0.02   # piso (rad)
+    odom_sigma_per_rot: 0.10      # rad de incerteza por rad rodado (10%)
+
+    # --- Ruído da observação bearing-range DEPENDENTE DO ALCANCE (DBH/centro
+    #     mal-condicionado a >8-10 m; sigma fixo de 15 cm fazia observações
+    #     longe/más puxar a pose) ---
+    use_range_dependent_obs_sigma: true
+    obs_bearing_sigma_rad: 0.05
+    obs_range_sigma_base_m: 0.10   # piso (m) a alcance ~0
+    obs_range_sigma_per_m: 0.03    # +3 cm de sigma por m de alcance
+
     # Tracker — classificação probabilística (Fase 1)
     tracker_promote_prob: 0.70
     tracker_promote_margin: 0.20
     tracker_promote_min_obs: 4
+    # Gate de NASCIMENTO: alcance (geométrico, direto aos fantasmas de longe) +
+    # confiança mínima da deteção baixa (não bloquear caminho-B/arco-parcial).
+    tracker_birth_confidence: 0.30
+    # 8m CRATEROU o recall (12→3): com o cone frontal estreito, as árvores são vistas
+    # a >8m e saem do cone antes de o robô chegar perto → nunca nasciam; e menos
+    # landmarks = mais deriva. O alcance NÃO separa fantasma de real (ambos a 5-10m).
+    # Desligado (12 > alcance do LiDAR). A limpeza fica a cargo do S/paralaxe (verde).
+    tracker_birth_max_range_m: 12.0
+    # SCORER DINÂMICO (S): cresce devagar com qualidade × paralaxe × consistência;
+    # promove (verde) só com S alto E vistas de ≥4 ângulos distintos (≥60°).
+    tracker_score_gain: 0.30
+    # 0 = ângulo repetido NÃO conta → o S só cresce com ângulos NOVOS (paralaxe).
+    # Assim S alto ⟺ muitas vistas distintas; confirmação = S≥limiar (um só critério).
+    tracker_score_novelty_repeat: 0.0
+    # Consistência SUAVE (sigma 0.8) p/ não matar o score com a deriva normal (~1 m).
+    # Penalização ativa só em SALTOS grandes (>2.5 m); a localização real é garantida
+    # pelo gate de PARALAXE, não pelo resíduo (que é frágil à deriva).
+    tracker_score_consistency_sigma_m: 0.80
+    tracker_score_inconsistent_residual_m: 2.5
+    tracker_score_penalty: 0.10
+    tracker_parallax_bin_count: 24        # 360°/24 = bins de 15°
+    # CALIBRAÇÃO: gates frouxos para MEDIR a distribuição de S/paralaxe das árvores
+    # reais vs fantasmas; depois aperta-se com base nos dados.
+    tracker_promote_min_parallax_bins: 2
+    tracker_promote_score_min: 0.2
     tracker_class_min_bearing_delta_rad: 0.15
     tracker_class_correlated_obs_weight: 0.15
 
@@ -23,3 +88,53 @@ tree_slam_node:
     multiview_saturation_coverage: 0.65
     multiview_min_inlier_frames: 3
     multiview_saturation_max_diameter_var: 0.0025
+
+    # Alinhamento de constelação local (Fase 1 da rearquitetura — ver
+    # docs/FOREST_SLAM_REARCHITECTURE_PLAN.md). A cada scan, alinha a constelação
+    # observada ao mapa local p/ corrigir a deriva incremental antes de associar.
+    # A/B validado: elimina fantasmas distantes (10/10 tracks ≤1.6 m vs 6/10 >2 m).
+    local_align_enable: true
+    local_align_radius_m: 15.0            # raio do mapa local (landmarks à volta da pose)
+    local_align_min_correspondences: 4    # >=4: redundância p/ validar (3 pts = SE2 exata, frágil)
+    local_align_min_overlap: 0.6
+    local_align_planar_residual_m: 0.5
+    local_align_diameter_residual_m: 1.0  # DBH mal-condicionado: não filtrar assoc. por diâmetro
+    local_align_max_residual_m: 0.30      # rejeita alinhamento com resíduo médio acima disto
+
+    # Loop closure global no solo (próximo passo da rearquitetura). Periodicamente
+    # reconhece a constelação atual contra os landmarks MADUROS do mapa global; se a
+    # odom acumulou erro de fecho, re-observa-os a partir da keyframe atual → o GTSAM
+    # des-distorce o caminho (o alinhamento local só trava a deriva nova, não o offset).
+    loop_closure_enable: true
+    loop_closure_interval_scans: 10       # tenta a cada N scans (custo controlado)
+    loop_closure_min_fix_error_m: 0.5     # só dispara se odom discorda das âncoras > isto
+    loop_closure_min_correspondences: 5   # suporte EXIGENTE: fecho falso é catastrófico (R4)
+    loop_closure_min_overlap: 0.6
+    loop_closure_planar_residual_m: 0.4
+    loop_closure_diameter_residual_m: 1.0  # DBH mal-condicionado: não filtrar por diâmetro
+
+    # Fase 3 — posição do landmark a partir da nuvem multi-vista. Quando o buffer
+    # multi-vista satura (boa cobertura/arco), a posição do ajuste de cilindro entra
+    # no backend como prior FORTE → manda sobre a triangulação bearing×range (que é
+    # mal-condicionada a >8 m). Uma vez por landmark.
+    multiview_position_prior_enable: true
+    multiview_position_prior_sigma_m: 0.08
+    multiview_position_min_coverage: 0.30   # cobertura p/ a POSIÇÃO (< saturação 0.65 do DBH)
+    multiview_position_min_frames: 4        # nº mínimo de vistas para um centro fiável
+
+    # Fusão câmara→LiDAR (ver docs/FOREST_VISION_LIDAR_FUSION_PLAN.md). F2: associa as
+    # deteções LiDAR (base_link) às caixas do detetor por projeção (extrínseca estática
+    # base→câmara + K). Ainda SÓ logging (a fusão de classe é a F3). Kill-switch:
+    # fusion_camera_enabled=false reproduz o baseline (sem subscrições de câmara).
+    fusion_camera_enabled: true
+    fusion_cam_topic: /perception/camera/detections
+    fusion_cam_info_topic: /camera/camera_info
+    fusion_cam_sync_tol_ms: 150.0           # tolerância de stamp câmara↔frame LiDAR
+    fusion_cam_min_conf: 0.40               # ignora deteções de câmara abaixo disto
+    fusion_cam_extrinsic_xyz: [0.40, 0.0, 0.24]  # base_link→câmara frontal (RPY=0)
+    # F3 — fusão de classe: o LiDAR satura a posterior no teto c_lidar (0.85 > prob de
+    # promoção 0.70 → o LiDAR sozinho ainda promove, só mais devagar); a câmara fornece
+    # o log-odds que cruza a promoção. w_cam=0 → posterior idêntica à do LiDAR (regressão).
+    fusion_class_c_lidar: 0.85
+    fusion_class_w_cam: 1.0
+    fusion_class_cam_min_conf: 0.40

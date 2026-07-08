@@ -186,3 +186,81 @@ TEST(Relocalizer, RejectsTooFewLandmarksToCorrespond)
   TreeLocRelocalizer reloc;
   EXPECT_FALSE(reloc.relocalize(query, map).accepted);
 }
+
+// --- Fase 1: alinhamento de constelação LOCAL por-scan -------------------
+// Diferente do loop closure: corre a cada scan, com poucos troncos co-visíveis
+// e deriva incremental PEQUENA. Os params de alinhamento (min_correspondences=4)
+// têm de recuperar a deriva com 4 troncos — mas exigir redundância (>=4, não 3:
+// 3 pontos definem exatamente uma SE2, sem margem para validar — R4).
+
+namespace
+{
+// Params equivalentes aos do node para alinhamento por-scan (ver
+// tree_slam_node.cpp: local_align_*).
+RelocalizerParams local_align_params()
+{
+  RelocalizerParams p;
+  p.min_correspondences = 4;
+  p.min_overlap_ratio = 0.6;
+  p.planar_residual_threshold_m = 0.5;
+  p.diameter_residual_threshold_m = 1.0;  // DBH mal-condicionado: não filtrar por diâmetro
+  return p;
+}
+
+// Aplica uma deriva rígida (dx,dy,dtheta) a uma constelação, pondo uid=0
+// (identidade desconhecida — é o que o alinhamento resolve).
+std::vector<LandmarkPoint> drift_constellation(
+  const std::vector<LandmarkPoint> & src, double dx, double dy, double dtheta)
+{
+  std::vector<LandmarkPoint> out;
+  const double c = std::cos(dtheta), s = std::sin(dtheta);
+  for (const auto & p : src) {
+    LandmarkPoint q;
+    q.uid = 0;
+    q.x = c * p.x - s * p.y + dx;
+    q.y = s * p.x + c * p.y + dy;
+    q.diameter = p.diameter;
+    out.push_back(q);
+  }
+  return out;
+}
+}  // namespace
+
+TEST(Relocalizer, LocalAlignmentRecoversSmallDriftWithFourTrunks)
+{
+  const auto map = make_synthetic_forest_map();
+  // Mapa local: 5 troncos numa vizinhança (índices arbitrários mas dispersos).
+  std::vector<LandmarkPoint> local_map = {map[3], map[11], map[20], map[31], map[42]};
+  // O robô vê os mesmos 5, mas a sua pose derivou (0.6 m, 0.4 m, 4°) → a
+  // constelação observada aparece deslocada por essa deriva.
+  const double dtheta = 4.0 * M_PI / 180.0;
+  const auto query = drift_constellation(local_map, 0.6, 0.4, dtheta);
+
+  TreeLocRelocalizer reloc(local_align_params());
+  const auto result = reloc.relocalize(query, local_map);
+
+  ASSERT_TRUE(result.accepted);
+  EXPECT_LT(result.mean_residual_m, 0.05);  // geometria exata → resíduo ~0
+  // T leva a query (mundo derivado) de volta ao mapa: aplicá-la a cada deteção
+  // deve cair em cima do landmark real.
+  for (std::size_t i = 0; i < query.size(); ++i) {
+    const double cs = std::cos(result.map_to_query_transform.theta);
+    const double sn = std::sin(result.map_to_query_transform.theta);
+    const double px = cs * query[i].x - sn * query[i].y + result.map_to_query_transform.x;
+    const double py = sn * query[i].x + cs * query[i].y + result.map_to_query_transform.y;
+    EXPECT_NEAR(px, local_map[i].x, 0.05);
+    EXPECT_NEAR(py, local_map[i].y, 0.05);
+  }
+}
+
+TEST(Relocalizer, LocalAlignmentFallsBackWithTooFewTrunks)
+{
+  const auto map = make_synthetic_forest_map();
+  // Só 3 troncos co-visíveis: 3 pontos definem exatamente uma SE2, sem
+  // redundância para validar → o alinhamento por-scan recusa (fallback à odom).
+  std::vector<LandmarkPoint> local_map = {map[3], map[11], map[20]};
+  const auto query = drift_constellation(local_map, 0.5, 0.3, 0.05);
+
+  TreeLocRelocalizer reloc(local_align_params());
+  EXPECT_FALSE(reloc.relocalize(query, local_map).accepted);
+}

@@ -101,6 +101,12 @@ public:
   void add_relocalization_factor(
     LandmarkUid uid, std::size_t keyframe_index, double bearing_rad, double range_m);
 
+  // Prior de posição absoluta num landmark (Fase 3). Injeta a posição do ajuste de
+  // cilindro à nuvem multi-vista, que é mais fiável que a triangulação bearing×range
+  // a >8 m (mal-condicionada). Só atua em landmarks já no grafo.
+  void add_landmark_position_prior(
+    LandmarkUid uid, const Eigen::Vector2d & xy_world, const Eigen::Vector2d & sigma);
+
   // Corre uma iteração incremental do iSAM2 com os fatores/valores acumulados
   // desde a última chamada. Devolve false se não havia nada novo.
   bool optimize();

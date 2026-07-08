@@ -13,10 +13,12 @@
 #include <cstdio>
 #include <deque>
 #include <map>
+#include <set>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -30,9 +32,11 @@
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/point_cloud2_iterator.hpp"
+#include "vision_msgs/msg/detection2_d_array.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2/LinearMath/Transform.h"
 #include "tf2/utils.h"
@@ -43,6 +47,7 @@
 #include "visualization_msgs/msg/marker_array.hpp"
 
 #include "forest_tree_slam/backend.hpp"
+#include "forest_tree_slam/camera_projection.hpp"
 #include "forest_tree_slam/landmark_class.hpp"
 #include "forest_tree_slam/mode_manager.hpp"
 #include "forest_tree_slam/relocalizer.hpp"
@@ -127,6 +132,11 @@ public:
     odom_frame_ = declare_parameter<std::string>("odom_frame", "odom");
     base_link_frame_ = declare_parameter<std::string>("base_link_frame", "marble_hd2/base_link");
     publish_hz_ = declare_parameter<double>("publish_hz", 10.0);
+    // Pós-data do map->odom (como o AMCL): carimbar para o FUTURO por esta margem,
+    // para o TF ser válido até à próxima publicação. Sem isto, consumidores (Nav2/RPP)
+    // que pedem a transformação "agora" caem à frente do último carimbo →
+    // "extrapolation into the future" → o controlador não transforma a pose e ABORTA.
+    tf_transform_tolerance_ = declare_parameter<double>("tf_transform_tolerance", 0.2);
     gnss_good_variance_m2_ = declare_parameter<double>("gnss_good_variance_m2", 4.0);
     relocalization_max_scans_per_attempt_ =
       declare_parameter<int>("relocalization_max_scans_per_attempt", 10);
@@ -138,17 +148,111 @@ public:
       declare_parameter<double>("aerial_hop_sigma_theta", 0.3));
     aerial_hop_sigma_ = hop_sigma;
 
-    backend_ = std::make_unique<TreeSlamBackend>();
+    // --- BackendParams afináveis por YAML (antes eram defaults hardcoded e o
+    //     backend era construído sem params → impossível afinar o ruído do
+    //     GTSAM sem recompilar). Os defaults aqui replicam os de backend.hpp. ---
+    BackendParams backend_params;
+    backend_params.keyframe_distance_m =
+      declare_parameter<double>("backend_keyframe_distance_m", 0.75);
+    backend_params.keyframe_angle_rad =
+      declare_parameter<double>("backend_keyframe_angle_rad", 0.35);
+    const double prior_sigma_xy = declare_parameter<double>("backend_prior_sigma_xy", 0.1);
+    backend_params.prior_pose_sigma = Eigen::Vector3d(
+      prior_sigma_xy, prior_sigma_xy,
+      declare_parameter<double>("backend_prior_sigma_theta", 0.05));
+    const double odom_sigma_xy = declare_parameter<double>("backend_odom_sigma_xy", 0.05);
+    backend_params.default_odom_sigma = Eigen::Vector3d(
+      odom_sigma_xy, odom_sigma_xy,
+      declare_parameter<double>("backend_odom_sigma_theta", 0.03));
+    backend_params.default_bearing_sigma_rad =
+      declare_parameter<double>("backend_bearing_sigma_rad", 0.05);
+    backend_params.default_range_sigma_m =
+      declare_parameter<double>("backend_range_sigma_m", 0.15);
+    backend_params.constellation_distance_sigma_m =
+      declare_parameter<double>("backend_constellation_sigma_m", 0.1);
+    backend_params.use_robust_kernels =
+      declare_parameter<bool>("backend_use_robust_kernels", true);
+    backend_params.robust_huber_k =
+      declare_parameter<double>("backend_robust_huber_k", 1.345);
+    backend_ = std::make_unique<TreeSlamBackend>(backend_params);
+    backend_default_odom_sigma_ = backend_params.default_odom_sigma;
+
+    // --- Modelo de ruído de odom PROPORCIONAL AO MOVIMENTO (substitui o sigma
+    //     fixo de 5 cm que o nó nunca preenchia). Entre keyframes, a incerteza
+    //     do delta cresce com a translação e a rotação percorridas — em terreno
+    //     irregular a odom derrapa muito mais que 5 cm, e um sigma fixo apertado
+    //     fazia o backend confiar cego na odom e ignorar a correção dos troncos.
+    odom_sigma_base_xy_ = declare_parameter<double>("odom_sigma_base_xy", 0.05);
+    odom_sigma_per_trans_ = declare_parameter<double>("odom_sigma_per_trans", 0.15);
+    odom_sigma_per_rot_xy_ = declare_parameter<double>("odom_sigma_per_rot_xy", 0.10);
+    odom_sigma_base_theta_ = declare_parameter<double>("odom_sigma_base_theta", 0.02);
+    odom_sigma_per_rot_ = declare_parameter<double>("odom_sigma_per_rot", 0.10);
+    use_motion_odom_sigma_ = declare_parameter<bool>("use_motion_odom_sigma", true);
+
+    // --- Ruído da observação bearing-range DEPENDENTE DO ALCANCE. O DBH/centro
+    //     de um tronco visto a 8-12 m com arco parcial é mal-condicionado (ver
+    //     dbh_stability_arc_illposed); injetá-lo com o mesmo sigma de 15 cm de um
+    //     tronco a 2 m faz observações más puxar a pose. range_sigma cresce com r.
+    obs_bearing_sigma_rad_ = declare_parameter<double>("obs_bearing_sigma_rad", 0.05);
+    obs_range_sigma_base_m_ = declare_parameter<double>("obs_range_sigma_base_m", 0.10);
+    obs_range_sigma_per_m_ = declare_parameter<double>("obs_range_sigma_per_m", 0.03);
+    use_range_dependent_obs_sigma_ =
+      declare_parameter<bool>("use_range_dependent_obs_sigma", true);
 
     TrackerParams tracker_params;
     tracker_params.promote_prob = declare_parameter<double>("tracker_promote_prob", 0.70);
     tracker_params.promote_margin = declare_parameter<double>("tracker_promote_margin", 0.20);
     tracker_params.promote_min_obs =
       static_cast<std::uint32_t>(declare_parameter<int>("tracker_promote_min_obs", 4));
+    // Fusão de classe da câmara (F3).
+    tracker_params.fusion_class_c_lidar =
+      declare_parameter<double>("fusion_class_c_lidar", 0.85);
+    tracker_params.fusion_class_w_cam = declare_parameter<double>("fusion_class_w_cam", 1.0);
+    tracker_params.fusion_class_cam_min_conf =
+      declare_parameter<double>("fusion_class_cam_min_conf", 0.40);
+    tracker_params.birth_confidence =
+      declare_parameter<double>("tracker_birth_confidence", 0.3);
+    tracker_params.birth_max_range_m =
+      declare_parameter<double>("tracker_birth_max_range_m", 8.0);
+    // Scorer dinâmico (S) + paralaxe
+    tracker_params.score_gain =
+      declare_parameter<double>("tracker_score_gain", 0.15);
+    tracker_params.score_novelty_repeat =
+      declare_parameter<double>("tracker_score_novelty_repeat", 0.10);
+    tracker_params.score_consistency_sigma_m =
+      declare_parameter<double>("tracker_score_consistency_sigma_m", 0.30);
+    tracker_params.score_inconsistent_residual_m =
+      declare_parameter<double>("tracker_score_inconsistent_residual_m", 0.5);
+    tracker_params.score_penalty =
+      declare_parameter<double>("tracker_score_penalty", 0.10);
+    tracker_params.parallax_bin_count =
+      declare_parameter<int>("tracker_parallax_bin_count", 24);
+    tracker_params.promote_min_parallax_bins =
+      declare_parameter<int>("tracker_promote_min_parallax_bins", 4);
+    tracker_params.promote_score_min =
+      declare_parameter<double>("tracker_promote_score_min", 0.5);
     tracker_params.class_min_bearing_delta_rad =
       declare_parameter<double>("tracker_class_min_bearing_delta_rad", 0.15);
     tracker_params.class_correlated_obs_weight =
       declare_parameter<double>("tracker_class_correlated_obs_weight", 0.15);
+    // --- Re-associação geométrica de solo (loop closure terrestre) — antes
+    //     hardcoded em tracker.hpp; exposto p/ afinar o gargalo da deriva. ---
+    tracker_params.enable_geometric_reassoc =
+      declare_parameter<bool>("tracker_enable_geometric_reassoc", true);
+    tracker_params.geo_min_query =
+      declare_parameter<int>("tracker_geo_min_query", 4);
+    tracker_params.ground_reloc.triangle_side_tolerance_m =
+      declare_parameter<double>("geo_triangle_side_tolerance_m", 0.4);
+    tracker_params.ground_reloc.planar_residual_threshold_m =
+      declare_parameter<double>("geo_planar_residual_threshold_m", 0.4);
+    tracker_params.ground_reloc.diameter_residual_threshold_m =
+      declare_parameter<double>("geo_diameter_residual_threshold_m", 0.2);
+    tracker_params.ground_reloc.min_overlap_ratio =
+      declare_parameter<double>("geo_min_overlap_ratio", 0.5);
+    tracker_params.ground_reloc.min_correspondences =
+      declare_parameter<int>("geo_min_correspondences", 4);
+    tracker_params.ground_reloc.min_triangle_side_m =
+      declare_parameter<double>("geo_min_triangle_side_m", 0.5);
     MultiviewDbhParams mv_params;
     mv_params.voxel_size_m = declare_parameter<double>("multiview_voxel_size_m", 0.02);
     mv_params.coverage_bins = declare_parameter<int>("multiview_coverage_bins", 36);
@@ -181,6 +285,79 @@ public:
     reloc_params.diameter_bin_max_m =
       declare_parameter<double>("relocalizer_diameter_bin_max_m", 1.5);
     relocalizer_ = std::make_unique<TreeLocRelocalizer>(reloc_params);
+
+    // Alinhamento de constelação local (Fase 1): a CADA scan, alinha a
+    // constelação observada com o mapa LOCAL (landmarks num raio) para corrigir
+    // a deriva incremental antes de associar. Reusa o motor de triângulos do
+    // relocalizador, mas com params próprios: mais permissivo no nº mínimo de
+    // correspondências (a maioria dos scans vê poucos troncos — R3), mas com
+    // redundância obrigatória (>=4: 3 pontos definem exatamente uma SE2, sem
+    // margem para validar contra constelação ambígua — R4).
+    local_align_enable_ = declare_parameter<bool>("local_align_enable", true);
+    local_align_radius_m_ = declare_parameter<double>("local_align_radius_m", 15.0);
+    local_align_max_residual_m_ = declare_parameter<double>("local_align_max_residual_m", 0.30);
+    RelocalizerParams align_params;
+    align_params.diameter_bin_max_m = reloc_params.diameter_bin_max_m;
+    align_params.min_correspondences =
+      declare_parameter<int>("local_align_min_correspondences", 4);
+    align_params.min_overlap_ratio = declare_parameter<double>("local_align_min_overlap", 0.6);
+    align_params.planar_residual_threshold_m =
+      declare_parameter<double>("local_align_planar_residual_m", 0.5);
+    // DBH é mal-condicionado (salta) — não filtrar associação por diâmetro aqui.
+    align_params.diameter_residual_threshold_m =
+      declare_parameter<double>("local_align_diameter_residual_m", 1.0);
+    local_align_reloc_ = std::make_unique<TreeLocRelocalizer>(align_params);
+
+    // Loop closure global no solo (próximo passo da rearquitetura). Periodicamente,
+    // reconhece a constelação atual contra o mapa GLOBAL (ancorado em landmarks
+    // MADUROS) e, se há erro de fecho, adiciona fatores que criam o ciclo no grafo
+    // → o GTSAM des-distorce o caminho todo (o alinhamento local só trava a deriva
+    // nova, não corrige o offset acumulado — R2). Suporte EXIGENTE: um loop closure
+    // falso des-distorce ERRADO (catastrófico) — R4.
+    loop_closure_enable_ = declare_parameter<bool>("loop_closure_enable", true);
+    loop_closure_interval_scans_ =
+      declare_parameter<int>("loop_closure_interval_scans", 10);
+    loop_closure_min_fix_error_m_ =
+      declare_parameter<double>("loop_closure_min_fix_error_m", 0.5);
+    RelocalizerParams lc_params;
+    lc_params.diameter_bin_max_m = reloc_params.diameter_bin_max_m;
+    lc_params.min_correspondences = declare_parameter<int>("loop_closure_min_correspondences", 5);
+    lc_params.min_overlap_ratio = declare_parameter<double>("loop_closure_min_overlap", 0.6);
+    lc_params.planar_residual_threshold_m =
+      declare_parameter<double>("loop_closure_planar_residual_m", 0.4);
+    lc_params.diameter_residual_threshold_m =
+      declare_parameter<double>("loop_closure_diameter_residual_m", 1.0);  // DBH mal-condicionado
+    loop_closure_reloc_ = std::make_unique<TreeLocRelocalizer>(lc_params);
+
+    // Fase 3 — posição do landmark a partir da nuvem multi-vista. Quando o buffer
+    // multi-vista satura (boa cobertura/arco), a posição do ajuste de cilindro
+    // (refit.cx/cy, já em t.xy) entra no backend como prior FORTE — passa a mandar
+    // sobre a triangulação bearing×range (mal-condicionada a >8 m). Uma vez por uid.
+    multiview_position_prior_enable_ =
+      declare_parameter<bool>("multiview_position_prior_enable", true);
+    multiview_position_prior_sigma_m_ =
+      declare_parameter<double>("multiview_position_prior_sigma_m", 0.08);
+    multiview_position_min_coverage_ =
+      declare_parameter<double>("multiview_position_min_coverage", 0.30);
+    multiview_position_min_frames_ =
+      declare_parameter<int>("multiview_position_min_frames", 4);
+
+    // Fusão câmara→LiDAR (F2: associação por projeção; ainda SEM fundir classe).
+    // O landmark por-frame está em base_link → projeta-se na imagem com a extrínseca
+    // estática base→câmara + K; associa-se à caixa do detetor que o contém.
+    fusion_camera_enabled_ = declare_parameter<bool>("fusion_camera_enabled", true);
+    fusion_cam_topic_ =
+      declare_parameter<std::string>("fusion_cam_topic", "/perception/camera/detections");
+    fusion_cam_info_topic_ =
+      declare_parameter<std::string>("fusion_cam_info_topic", "/camera/camera_info");
+    fusion_cam_sync_tol_ms_ = declare_parameter<double>("fusion_cam_sync_tol_ms", 150.0);
+    fusion_cam_min_conf_ = declare_parameter<double>("fusion_cam_min_conf", 0.40);
+    const auto extr = declare_parameter<std::vector<double>>(
+      "fusion_cam_extrinsic_xyz", std::vector<double>{0.40, 0.0, 0.24});
+    cam_extrinsic_ = Eigen::Vector3d(
+      extr.size() > 0 ? extr[0] : 0.40, extr.size() > 1 ? extr[1] : 0.0,
+      extr.size() > 2 ? extr[2] : 0.24);
+
     mode_manager_ = std::make_unique<ModeManager>();
 
     rclcpp::QoS transient_local(1);
@@ -196,6 +373,14 @@ public:
     sub_tree_clusters_ = create_subscription<sensor_msgs::msg::PointCloud2>(
       "/perception/lidar/tree_clusters", rclcpp::SensorDataQoS(),
       std::bind(&TreeSlamNode::on_tree_clusters, this, std::placeholders::_1));
+    if (fusion_camera_enabled_) {
+      sub_camera_dets_ = create_subscription<vision_msgs::msg::Detection2DArray>(
+        fusion_cam_topic_, 10,
+        std::bind(&TreeSlamNode::on_camera_detections, this, std::placeholders::_1));
+      sub_camera_info_ = create_subscription<sensor_msgs::msg::CameraInfo>(
+        fusion_cam_info_topic_, rclcpp::QoS(1).transient_local(),
+        std::bind(&TreeSlamNode::on_camera_info, this, std::placeholders::_1));
+    }
     sub_odom_ = create_subscription<nav_msgs::msg::Odometry>(
       "/state/odometry", 50, std::bind(&TreeSlamNode::on_odom, this, std::placeholders::_1));
     sub_mode_ = create_subscription<forest_hybrid_msgs::msg::OperationMode>(
@@ -319,6 +504,116 @@ private:
     try_flush_multiview(stamp_sec);
   }
 
+  // Intrínsecos da câmara (uma vez; transient_local garante a entrega tardia).
+  void on_camera_info(const sensor_msgs::msg::CameraInfo::SharedPtr msg)
+  {
+    cam_intrinsics_.fx = msg->k[0];
+    cam_intrinsics_.cx = msg->k[2];
+    cam_intrinsics_.fy = msg->k[4];
+    cam_intrinsics_.cy = msg->k[5];
+    cam_intrinsics_.width = static_cast<int>(msg->width);
+    cam_intrinsics_.height = static_cast<int>(msg->height);
+    cam_intrinsics_.valid = cam_intrinsics_.fx > 0.0 && cam_intrinsics_.width > 0;
+  }
+
+  // Deteções da câmara (bbox em px + classe). Guarda por stamp; a associação
+  // por-frame faz-se no on_landmarks (mesmo padrão diferido dos tree_clusters).
+  void on_camera_detections(const vision_msgs::msg::Detection2DArray::SharedPtr msg)
+  {
+    const double stamp_sec = stamp_to_sec(msg->header.stamp);
+    camera_dets_by_stamp_[stamp_sec] = msg;
+    while (camera_dets_by_stamp_.size() > 32) {
+      camera_dets_by_stamp_.erase(camera_dets_by_stamp_.begin());
+    }
+  }
+
+  // Deteções de câmara cujo stamp esteja dentro da tolerância de `stamp_sec`.
+  vision_msgs::msg::Detection2DArray::ConstSharedPtr camera_dets_for_stamp(double stamp_sec) const
+  {
+    const double tol = fusion_cam_sync_tol_ms_ * 1.0e-3;
+    double best_dt = tol;
+    vision_msgs::msg::Detection2DArray::ConstSharedPtr best;
+    for (const auto & kv : camera_dets_by_stamp_) {
+      const double dt = std::abs(kv.first - stamp_sec);
+      if (dt <= best_dt) {
+        best_dt = dt;
+        best = kv.second;
+      }
+    }
+    return best;
+  }
+
+  // Taxonomia 4→3 do detetor para o índice de classe do SLAM [0=tronco, 1=rocha,
+  // 2=obstáculo]. bush e fallen_log → obstáculo. Desconhecido → -1 (não funde).
+  static int camera_class_to_index(const std::string & class_id)
+  {
+    if (class_id == "tree") {return 0;}
+    if (class_id == "rock") {return 1;}
+    if (class_id == "bush" || class_id == "fallen_log") {return 2;}
+    return -1;
+  }
+
+  // F3 — associação câmara↔landmark por PROJEÇÃO + FUSÃO de classe. Para cada
+  // deteção LiDAR do frame (base_link) com uid, projeta a base na imagem, procura
+  // a caixa do detetor que a contém e injeta a classe da câmara no log-odds do
+  // track (cap soft no tracker). Loga a taxa de associação.
+  void associate_camera_detections(
+    const forest_hybrid_msgs::msg::TreeLandmarkArray & msg, const TrackerUpdateReport & report,
+    double stamp_sec)
+  {
+    if (!fusion_camera_enabled_ || !cam_intrinsics_.valid) {
+      return;
+    }
+    const auto cam = camera_dets_for_stamp(stamp_sec);
+    if (!cam || cam->detections.empty()) {
+      return;
+    }
+    std::size_t n_proj = 0, n_assoc = 0;
+    for (std::size_t i = 0; i < msg.trees.size() && i < report.detection_to_uid.size(); ++i) {
+      if (report.detection_to_uid[i] == 0) {
+        continue;
+      }
+      const Eigen::Vector3d p_base(msg.trees[i].base.x, msg.trees[i].base.y, msg.trees[i].base.z);
+      const auto pr = project_base_to_image(p_base, cam_extrinsic_, cam_intrinsics_);
+      if (!pr.valid) {
+        continue;
+      }
+      ++n_proj;
+      for (const auto & det : cam->detections) {
+        if (det.results.empty() ||
+          det.results.front().hypothesis.score < fusion_cam_min_conf_)
+        {
+          continue;
+        }
+        if (pixel_in_bbox(
+            pr.u, pr.v, det.bbox.center.position.x, det.bbox.center.position.y,
+            det.bbox.size_x, det.bbox.size_y))
+        {
+          ++n_assoc;
+          ++cam_assoc_hits_;
+          // F3 — funde a classe da câmara no log-odds deste landmark.
+          const int cls = camera_class_to_index(det.results.front().hypothesis.class_id);
+          if (cls >= 0) {
+            const double bearing = std::atan2(p_base.y(), p_base.x());
+            tracker_->fuse_camera_class(
+              report.detection_to_uid[i], cls,
+              det.results.front().hypothesis.score, bearing);
+            ++cam_fused_;
+          }
+          break;
+        }
+      }
+    }
+    cam_assoc_attempts_ += n_proj;
+    if (n_proj > 0) {
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 2000,
+        "[cam] projetados=%zu associados=%zu fundidos(classe)=%zu (cum %zu/%zu) | %zu caixas",
+        n_proj, n_assoc, cam_fused_, cam_assoc_hits_, cam_assoc_attempts_,
+        cam->detections.size());
+    }
+  }
+
   sensor_msgs::msg::PointCloud2::ConstSharedPtr clusters_for_stamp(double stamp_sec) const
   {
     constexpr double kTol = 5.0e-4;
@@ -370,6 +665,47 @@ private:
       tracker_->ingest_multiview_inliers(uid, pts, pm.robot_xy, det);
     }
     pending_mv_.erase(pit);
+    flush_matured_position_priors();
+  }
+
+  // Fase 3 — injeta no backend a posição da nuvem dos landmarks que acabaram de
+  // saturar (uma vez por uid). A saturação é o gate de qualidade (cobertura/arco
+  // multi-vista); a posição do ajuste de cilindro (t.xy) é mais fiável que a
+  // triangulação bearing×range. Prior FORTE → manda sobre o bearing×range no grafo.
+  void flush_matured_position_priors()
+  {
+    if (!multiview_position_prior_enable_) {
+      return;
+    }
+    bool sent_any = false;
+    for (const auto & t : tracker_->tracks()) {
+      // A posição (centro do círculo) é bem-condicionada com MUITO menos cobertura
+      // que o diâmetro preciso: não esperar a saturação total (cobertura ≥0.65, que
+      // estas árvores raramente atingem) — basta um arco/nº de vistas suficiente.
+      const auto & buf = t.multiview_buffer;
+      const bool position_ready = buf.saturated() ||
+        (buf.n_inlier_frames() >= static_cast<std::uint32_t>(multiview_position_min_frames_) &&
+         buf.coverage_ratio() >= multiview_position_min_coverage_);
+      if (!position_ready || !feeds_pose_graph(t.uid)) {
+        continue;
+      }
+      if (position_prior_sent_.count(t.uid)) {
+        continue;
+      }
+      backend_->add_landmark_position_prior(
+        t.uid, t.xy,
+        Eigen::Vector2d(multiview_position_prior_sigma_m_, multiview_position_prior_sigma_m_));
+      position_prior_sent_.insert(t.uid);
+      ++position_priors_sent_;
+      sent_any = true;
+      RCLCPP_INFO(
+        get_logger(),
+        "[mv-pos] landmark %lu saturou: posição pela nuvem (%.2f, %.2f) → prior no grafo (total %zu)",
+        static_cast<unsigned long>(t.uid), t.xy.x(), t.xy.y(), position_priors_sent_);
+    }
+    if (sent_any) {
+      backend_->optimize();  // aplica os priors novos (raro: uma vez por landmark)
+    }
   }
 
   const LandmarkTrack * find_track(LandmarkUid uid) const
@@ -387,6 +723,47 @@ private:
     const auto * track = find_track(uid);
     return track != nullptr && LandmarkTracker::is_promoted(*track) &&
            is_slam_graph_class(track->committed_class);
+  }
+
+  // Fase 1 — alinhamento de constelação local. Dada a constelação observada
+  // (deteções já em mundo, com a pose PREVISTA/derivada) e o mapa local
+  // (landmarks do grafo num raio à volta da pose prevista), estima a SE(2) `T`
+  // que faz a observação coincidir com o mapa. `T` é a deriva incremental a
+  // corrigir. Devolve nullopt quando não há troncos suficientes / o alinhamento
+  // não é fiável → o chamador faz fallback à odom (R3). Não toca no backend:
+  // a correção entra pelas observações já consistentes, sem fator extra (R1).
+  std::optional<Pose2> compute_local_alignment(
+    const std::vector<TreeDetection> & detections_world, const Pose2 & predicted_world_pose) const
+  {
+    if (!local_align_enable_) {
+      return std::nullopt;
+    }
+    std::vector<LandmarkPoint> query;
+    query.reserve(detections_world.size());
+    for (const auto & d : detections_world) {
+      query.push_back(LandmarkPoint{0, d.x, d.y, d.diameter});
+    }
+    std::vector<LandmarkPoint> local_map;
+    const Eigen::Vector2d robot_xy(predicted_world_pose.x, predicted_world_pose.y);
+    for (const auto uid : backend_->all_landmark_uids()) {
+      if (!feeds_pose_graph(uid)) {
+        continue;
+      }
+      const Eigen::Vector2d xy = backend_->landmark_position(uid);
+      if ((xy - robot_xy).norm() > local_align_radius_m_) {
+        continue;
+      }
+      const auto * track = find_track(uid);
+      local_map.push_back(LandmarkPoint{uid, xy.x(), xy.y(), track ? track->diameter : 0.0});
+    }
+    if (local_map.size() < 3) {
+      return std::nullopt;
+    }
+    const auto result = local_align_reloc_->relocalize(query, local_map);
+    if (!result.accepted || result.mean_residual_m > local_align_max_residual_m_) {
+      return std::nullopt;  // sem alinhamento fiável → fallback odom
+    }
+    return result.map_to_query_transform;  // T: query(mundo derivado) -> mapa(grafo)
   }
 
   void on_landmarks(const forest_hybrid_msgs::msg::TreeLandmarkArray::SharedPtr msg)
@@ -469,15 +846,40 @@ private:
       tracker_->sync_landmark_anchors(backend_positions);
     }
 
+    // Fase 1 — alinhamento de constelação local. Estima `T` (deriva incremental)
+    // alinhando a constelação observada ao mapa local e CORRIGE pose+deteções de
+    // forma consistente (mesmo frame do grafo), antes de associar. Sem `T` fiável
+    // (poucos troncos / ambíguo), fica a pose prevista da odom (fallback, R3).
+    Pose2 aligned_world_pose = predicted_world_pose;
+    if (const auto t = compute_local_alignment(detections_world, predicted_world_pose)) {
+      aligned_world_pose = compose(*t, predicted_world_pose);
+      const double tc = std::cos(t->theta), ts = std::sin(t->theta);
+      Eigen::Matrix2d rt;
+      rt << tc, -ts, ts, tc;
+      for (auto & d : detections_world) {
+        const Eigen::Vector2d w = transform_point(*t, d.x, d.y);
+        d.x = w.x();
+        d.y = w.y();
+        d.base_covariance.topLeftCorner<2, 2>() =
+          rt * d.base_covariance.topLeftCorner<2, 2>() * rt.transpose();
+      }
+      ++local_align_hits_;
+    }
+    ++local_align_attempts_;
+
     const auto report = tracker_->update(
       detections_world, stamp_sec,
-      Eigen::Vector2d(predicted_world_pose.x, predicted_world_pose.y),
+      Eigen::Vector2d(aligned_world_pose.x, aligned_world_pose.y),
       angular_delta_since_last_scan);
 
     // Guarda este frame (pose + uid por deteção) para ingestão multi-vista diferida,
     // e tenta logo fechar o par caso o cluster deste stamp já tenha chegado.
-    store_pending_multiview(stamp_sec, predicted_world_pose, detections_world, report);
+    store_pending_multiview(stamp_sec, aligned_world_pose, detections_world, report);
     try_flush_multiview(stamp_sec);
+
+    // F2 — associa as deteções LiDAR deste frame às caixas da câmara por projeção
+    // (logging da taxa; ainda não funde classe — isso é a F3).
+    associate_camera_detections(*msg, report, stamp_sec);
 
     // Resumo de associação (sempre ligado, throttled): distingue associações
     // por POSIÇÃO (stage-A) das re-associações por GEOMETRIA (loop closure no
@@ -495,11 +897,14 @@ private:
           (t.dormant ? n_dormant : n_active)++;
         }
       }
+      const double align_frac = local_align_attempts_ > 0 ?
+        static_cast<double>(local_align_hits_) / static_cast<double>(local_align_attempts_) : 0.0;
       RCLCPP_INFO_THROTTLE(
         get_logger(), *get_clock(), 2000,
-        "[assoc] dets=%zu assoc=%zu (geo_reawaken=%zu) birth=%zu | mapa: ativos=%zu adormecidos=%zu",
+        "[assoc] dets=%zu assoc=%zu (geo_reawaken=%zu) birth=%zu | mapa: ativos=%zu adormecidos=%zu"
+        " | align=%.0f%% loop=%zu",
         detections_world.size(), n_assoc_total, report.reawakened.size(), report.births.size(),
-        n_active, n_dormant);
+        n_active, n_dormant, align_frac * 100.0, loop_closure_fires_);
     }
 
     // GROUND: decide se abre keyframe nova (acumula odom) e atribui o índice
@@ -507,7 +912,10 @@ private:
     std::size_t obs_keyframe = backend_->n_keyframes() - 1;
     bool opened_keyframe = false;
     if (backend_->should_open_keyframe(delta_since_keyframe)) {
-      obs_keyframe = backend_->add_odom_keyframe(delta_since_keyframe);
+      // Passa a covariância do delta (proporcional ao movimento) em vez de
+      // deixar o backend cair no sigma fixo de 5 cm.
+      obs_keyframe = backend_->add_odom_keyframe(
+        delta_since_keyframe, odom_sigma_for_delta(delta_since_keyframe));
       last_keyframe_odom_pose_ = scan_odom_pose;
       opened_keyframe = true;
     }
@@ -520,8 +928,10 @@ private:
     // otimizada e a sua pose é `last_kf_pose` — e é relativamente a ESSA pose
     // (não à pose dead-reckoned predicted) que a medição tem de ser calculada,
     // senão o fator descarta o Δodom keyframe->scan (bug corrigido, ver
-    // test_node_glue.cpp).
-    const Pose2 obs_pose = opened_keyframe ? predicted_world_pose : last_kf_pose;
+    // test_node_glue.cpp). Fase 1: as deteções estão no frame ALINHADO (corrigido
+    // por `T`), por isso a keyframe nova usa `aligned_world_pose` para coincidir
+    // o frame — a correção de pose flui pelas observações, sem fator extra (R1).
+    const Pose2 obs_pose = opened_keyframe ? aligned_world_pose : last_kf_pose;
 
     // Fatores bearing-range: só landmarks promovidos tronco/rocha (obstáculo fora do grafo).
     for (std::size_t i = 0; i < detections_world.size(); ++i) {
@@ -531,9 +941,16 @@ private:
       }
       const BearingRange br =
         bearing_range_from(obs_pose, detections_world[i].x, detections_world[i].y);
+      // Ruído da observação dependente do alcance (sentinela <0 → default backend
+      // para ambos, p/ A/B limpo).
+      const double range_sigma = obs_range_sigma_for(br.range);
+      const std::optional<double> bearing_opt = use_range_dependent_obs_sigma_ ?
+        std::optional<double>(obs_bearing_sigma_rad_) : std::nullopt;
       backend_->add_tree_observation(
         uid, obs_keyframe, br.bearing, br.range,
-        Eigen::Vector2d(detections_world[i].x, detections_world[i].y));
+        Eigen::Vector2d(detections_world[i].x, detections_world[i].y),
+        bearing_opt,
+        range_sigma > 0.0 ? std::optional<double>(range_sigma) : std::nullopt);
     }
     // Rigidez de constelação entre troncos vistos no MESMO scan (geometria
     // local crua em base_link, mais fiável que a estimativa em mundo).
@@ -541,6 +958,12 @@ private:
       for (std::size_t b = a + 1; b < msg->trees.size(); ++b) {
         const LandmarkUid ua = report.detection_to_uid[a], ub = report.detection_to_uid[b];
         if (ua == 0 || ub == 0 || !feeds_pose_graph(ua) || !feeds_pose_graph(ub)) {
+          continue;
+        }
+        // Dedup (bug #5): liga cada par UMA vez. Repetir o mesmo fator a cada scan
+        // torna a distância artificialmente certa e incha o grafo sem limite.
+        const auto pair = std::minmax(ua, ub);
+        if (!constellation_pairs_.emplace(pair.first, pair.second).second) {
           continue;
         }
         const double d = std::hypot(
@@ -557,6 +980,12 @@ private:
     }
 
     backend_->optimize();
+
+    // Loop closure global: des-distorce o grafo quando reconhece uma região
+    // antiga (âncoras maduras) e a odom acumulou erro de fecho. `predicted_world_pose`
+    // é a pose por ODOM pura (não a corrigida pelo alinhamento local) — de propósito.
+    try_ground_loop_closure(*msg, predicted_world_pose, obs_keyframe);
+
     scans_since_any_association_ = report.detection_to_uid.empty() ||
       std::all_of(report.detection_to_uid.begin(), report.detection_to_uid.end(), [](auto u) {
           return u == 0;
@@ -614,6 +1043,74 @@ private:
       latency * 1e3, odom_step, kf_wobble_xy, kf_wobble_th * 180.0 / M_PI,
       opened_keyframe ? " [KF]" : "", n_assoc, report.births.size(), report.deaths.size(),
       tracker_->tracks().size());
+  }
+
+  // Loop closure global no solo. Periodicamente, reconhece a constelação atual
+  // (deteções CRUAS em base_link) contra os landmarks MADUROS do mapa global e,
+  // se a pose reconhecida discorda da pose por ODOMETRIA pura (erro de fecho
+  // acumulado), re-observa esses landmarks a partir da keyframe atual → cria o
+  // ciclo no grafo → o GTSAM des-distorce o caminho todo. Comparar com a pose por
+  // odom (não a já-corrigida pelo alinhamento local) é deliberado: senão a
+  // correção local MASCARA o erro de fecho e o loop nunca disparava (R2).
+  void try_ground_loop_closure(
+    const forest_hybrid_msgs::msg::TreeLandmarkArray & msg,
+    const Pose2 & odom_predicted_pose, std::size_t obs_keyframe)
+  {
+    if (!loop_closure_enable_) {
+      return;
+    }
+    if (++loop_closure_scan_counter_ < loop_closure_interval_scans_) {
+      return;
+    }
+    loop_closure_scan_counter_ = 0;
+    if (msg.trees.size() < 4) {
+      return;  // constelação insuficiente para um fecho fiável (R4)
+    }
+
+    std::vector<LandmarkPoint> query;
+    query.reserve(msg.trees.size());
+    for (const auto & tree : msg.trees) {
+      query.push_back(LandmarkPoint{0, tree.base.x, tree.base.y, tree.diameter});
+    }
+    // Âncoras: só landmarks MADUROS (confirmados por paralaxe) — fiáveis para
+    // fechar o laço; landmarks recentes/imaturos estão eles próprios derivados.
+    std::vector<LandmarkPoint> map_points;
+    for (const auto & t : tracker_->tracks()) {
+      if (!tracker_->is_confirmed(t) || !feeds_pose_graph(t.uid)) {
+        continue;
+      }
+      const Eigen::Vector2d xy = backend_->landmark_position(t.uid);
+      map_points.push_back(LandmarkPoint{t.uid, xy.x(), xy.y(), t.diameter});
+    }
+    if (map_points.size() < 5) {
+      return;
+    }
+
+    const auto result = loop_closure_reloc_->relocalize(query, map_points);
+    if (!result.accepted) {
+      return;
+    }
+    // `map_to_query_transform` leva a query (base_link) -> map = pose do robô
+    // segundo as âncoras maduras. Erro de fecho = vs a pose por odom pura.
+    const Pose2 reloc_pose = result.map_to_query_transform;
+    const double fix_error =
+      std::hypot(reloc_pose.x - odom_predicted_pose.x, reloc_pose.y - odom_predicted_pose.y);
+    if (fix_error < loop_closure_min_fix_error_m_) {
+      return;  // odom ainda consistente com as âncoras → nada a des-distorcer
+    }
+
+    for (const auto & c : result.correspondences) {
+      const auto & q = query[c.query_index];
+      const double range = std::hypot(q.x, q.y);
+      const double bearing = std::atan2(q.y, q.x);
+      backend_->add_relocalization_factor(c.map_uid, obs_keyframe, bearing, range);
+    }
+    backend_->optimize();
+    ++loop_closure_fires_;
+    RCLCPP_INFO(
+      get_logger(),
+      "[loop] fecho global: erro_odom=%.2fm overlap=%.2f %zu âncoras maduras → des-distorce",
+      fix_error, result.overlap_ratio, result.correspondences.size());
   }
 
   void try_relocalize(const forest_hybrid_msgs::msg::TreeLandmarkArray & msg)
@@ -720,8 +1217,8 @@ private:
     status.mode = static_cast<std::uint8_t>(mode_manager_->mode());
     status.n_landmarks_tracked = static_cast<std::uint32_t>(std::count_if(
       tracker_->tracks().begin(), tracker_->tracks().end(),
-        [](const LandmarkTrack & t) {
-          return LandmarkTracker::is_promoted(t) && is_map_output_class(t.committed_class);
+        [this](const LandmarkTrack & t) {
+          return tracker_->is_confirmed(t) && is_map_output_class(t.committed_class);
       }));
     status.owns_map_to_odom = mode_manager_->owns_map_to_odom();
     pub_status_->publish(status);
@@ -733,7 +1230,10 @@ private:
     out.header.stamp = now();
     out.header.frame_id = map_frame_;
     for (const auto & t : tracker_->tracks()) {
-      if (!LandmarkTracker::is_promoted(t) || !is_map_output_class(t.committed_class)) {
+      // MAPA/inventário: só CONFIRMADOS (promovido + paralaxe + score). Antes era
+      // is_promoted (4 obs do mesmo ângulo já punham a árvore no mapa → "verde
+      // logo no 1.º ângulo"); agora exige vistas de ângulos distintos.
+      if (!tracker_->is_confirmed(t) || !is_map_output_class(t.committed_class)) {
         continue;
       }
       forest_hybrid_msgs::msg::TrackedTreeLandmark m;
@@ -748,12 +1248,11 @@ private:
         m.position.y = t.xy.y();
       }
       m.diameter = static_cast<float>(t.diameter);
-      // Confiança = posterior de CLASSIFICAÇÃO da classe comprometida (acumula
-      // com vistas diversas e PERSISTE), não o contador de recência t.confidence
-      // (que decaía a 0 fora de vista). O volume de evidência vai em n_observations.
-      const Eigen::Vector3d post = LandmarkTracker::class_posterior(t);
-      const int ci = score_index_from_committed(t.committed_class);
-      m.confidence = (ci >= 0 && ci < 3) ? static_cast<float>(post[ci]) : 0.0F;
+      // Confiança publicada = S (scorer dinâmico: qualidade × paralaxe ×
+      // consistência). Cresce devagar com vistas boas de ângulos diferentes; não
+      // satura a 1.0 com o robô parado. A classe vai em semantic_class; o volume
+      // de evidência em n_observations.
+      m.confidence = static_cast<float>(t.score);
       m.n_observations = t.n_observations;
       // Covariância (x,y,dbh) para diagnóstico downstream.
       Eigen::Matrix3d cov3 = Eigen::Matrix3d::Zero();
@@ -812,7 +1311,8 @@ private:
       };
 
     for (const auto & t : tracker_->tracks()) {
-      if (!LandmarkTracker::is_promoted(t) || !is_map_output_class(t.committed_class)) {
+      // Markers no RViz: só CONFIRMADOS (paralaxe), igual ao /slam/tree_map.
+      if (!tracker_->is_confirmed(t) || !is_map_output_class(t.committed_class)) {
         continue;
       }
       if (is_slam_graph_class(t.committed_class) && !backend_->has_landmark(t.uid)) {
@@ -909,6 +1409,45 @@ private:
       }
     }
 
+    // ARESTAS de vizinhança (constelação): uma linha por par de landmarks ligados
+    // por um fator de rigidez no grafo. É o que responde a "que vizinho está ligado
+    // a que árvore" — a topologia do grafo, antes invisível no RViz.
+    {
+      visualization_msgs::msg::Marker edges;
+      edges.header.stamp = now();
+      edges.header.frame_id = map_frame_;
+      edges.ns = "tree_slam_constellation";
+      edges.id = 0;
+      edges.type = visualization_msgs::msg::Marker::LINE_LIST;
+      edges.action = visualization_msgs::msg::Marker::ADD;
+      edges.scale.x = 0.03;  // espessura da linha
+      edges.color.r = 0.9F;
+      edges.color.g = 0.9F;
+      edges.color.b = 0.2F;  // amarelo ténue
+      edges.color.a = 0.5F;
+      edges.pose.orientation.w = 1.0;
+      for (const auto & pr : constellation_pairs_) {
+        if (!backend_->has_landmark(pr.first) || !backend_->has_landmark(pr.second)) {
+          continue;
+        }
+        const Eigen::Vector2d pa = backend_->landmark_position(pr.first);
+        const Eigen::Vector2d pb = backend_->landmark_position(pr.second);
+        geometry_msgs::msg::Point ga;
+        ga.x = pa.x();
+        ga.y = pa.y();
+        ga.z = 0.0;
+        geometry_msgs::msg::Point gb;
+        gb.x = pb.x();
+        gb.y = pb.y();
+        gb.z = 0.0;
+        edges.points.push_back(ga);
+        edges.points.push_back(gb);
+      }
+      if (!edges.points.empty()) {
+        markers.markers.push_back(edges);
+      }
+    }
+
     // Contador global: total de uids alguma vez criados (baseline do churn).
     {
       visualization_msgs::msg::Marker counter;
@@ -983,11 +1522,25 @@ private:
       }
       tf2::Transform t_odom_base_tf;
       tf2::fromMsg(t_odom_base.transform, t_odom_base_tf);
-      last_map_odom_ = t_map_base * t_odom_base_tf.inverse();
+      // A correção map->odom é só deriva no PLANO (x, y, yaw). Projetar o
+      // odom->base para SE(2) antes de inverter — senão consome o roll/pitch/z
+      // (atitude SE3 do EKF) e o map->odom CANCELA-OS, achatando o frame `map`
+      // (terreno e landmarks inclinam quando o robô inclina). Pura SE(2): a
+      // atitude do odom->base passa intacta para map->base.
+      const double ob_yaw = tf2::getYaw(t_odom_base_tf.getRotation());
+      tf2::Transform t_odom_base_se2;
+      t_odom_base_se2.setOrigin(tf2::Vector3(
+          t_odom_base_tf.getOrigin().x(), t_odom_base_tf.getOrigin().y(), 0.0));
+      tf2::Quaternion q_ob;
+      q_ob.setRPY(0.0, 0.0, ob_yaw);
+      t_odom_base_se2.setRotation(q_ob);
+      last_map_odom_ = t_map_base * t_odom_base_se2.inverse();
     }
 
     geometry_msgs::msg::TransformStamped out;
-    out.header.stamp = now();
+    // Pós-datar (now + tolerância) para o map->odom ser válido até à próxima
+    // publicação — evita "extrapolation into the future" no Nav2/RPP.
+    out.header.stamp = now() + rclcpp::Duration::from_seconds(tf_transform_tolerance_);
     out.header.frame_id = map_frame_;
     out.child_frame_id = odom_frame_;
     tf2::toMsg(last_map_odom_, out.transform);
@@ -997,15 +1550,81 @@ private:
   // --- Parâmetros -----------------------------------------------------
   std::string map_frame_, odom_frame_, base_link_frame_;
   double publish_hz_{10.0};
+  double tf_transform_tolerance_{0.2};
   double gnss_good_variance_m2_{4.0};
   int relocalization_max_scans_per_attempt_{10};
   Eigen::Vector3d aerial_hop_sigma_{3.0, 3.0, 0.3};
+
+  // Modelo de ruído de odom proporcional ao movimento (ver construtor).
+  bool use_motion_odom_sigma_{true};
+  double odom_sigma_base_xy_{0.05};
+  double odom_sigma_per_trans_{0.15};
+  double odom_sigma_per_rot_xy_{0.10};
+  double odom_sigma_base_theta_{0.02};
+  double odom_sigma_per_rot_{0.10};
+  // Ruído de observação dependente do alcance (ver construtor).
+  bool use_range_dependent_obs_sigma_{true};
+  double obs_bearing_sigma_rad_{0.05};
+  double obs_range_sigma_base_m_{0.10};
+  double obs_range_sigma_per_m_{0.03};
+
+  // sigma (x,y,theta) do delta de odom entre keyframes, proporcional ao
+  // movimento percorrido. |trans| e |rot| grandes (terreno irregular, viragens)
+  // → mais incerteza → o backend deixa os troncos corrigir a pose.
+  Eigen::Vector3d odom_sigma_for_delta(const Pose2 & delta) const
+  {
+    if (!use_motion_odom_sigma_) {
+      return backend_default_odom_sigma_;
+    }
+    const double trans = std::hypot(delta.x, delta.y);
+    const double rot = std::abs(delta.theta);
+    const double sxy = odom_sigma_base_xy_ + odom_sigma_per_trans_ * trans +
+      odom_sigma_per_rot_xy_ * rot;
+    const double sth = odom_sigma_base_theta_ + odom_sigma_per_rot_ * rot;
+    return Eigen::Vector3d(sxy, sxy, sth);
+  }
+  // sigma do alcance de uma observação a `range` m: cresce linearmente com a
+  // distância (arco parcial mal-condicionado ao longe).
+  double obs_range_sigma_for(double range_m) const
+  {
+    if (!use_range_dependent_obs_sigma_) {
+      return -1.0;  // sentinela → usa o default do backend
+    }
+    return obs_range_sigma_base_m_ + obs_range_sigma_per_m_ * range_m;
+  }
+  Eigen::Vector3d backend_default_odom_sigma_{0.05, 0.05, 0.03};
 
   // --- Estado -----------------------------------------------------------
   std::unique_ptr<TreeSlamBackend> backend_;
   std::unique_ptr<LandmarkTracker> tracker_;
   std::unique_ptr<TreeLocRelocalizer> relocalizer_;
+  std::unique_ptr<TreeLocRelocalizer> local_align_reloc_;  // Fase 1: alinhamento por-scan
+  std::unique_ptr<TreeLocRelocalizer> loop_closure_reloc_;  // loop closure global no solo
   std::unique_ptr<ModeManager> mode_manager_;
+
+  bool local_align_enable_{true};
+  double local_align_radius_m_{15.0};
+  double local_align_max_residual_m_{0.30};
+  std::size_t local_align_hits_{0};       // scans com alinhamento aceite (R3: cobertura)
+  std::size_t local_align_attempts_{0};   // scans GROUND processados
+
+  bool loop_closure_enable_{true};
+  int loop_closure_interval_scans_{10};
+  double loop_closure_min_fix_error_m_{0.5};
+  int loop_closure_scan_counter_{0};
+  std::size_t loop_closure_fires_{0};     // loop closures aceites (des-distorções)
+
+  bool multiview_position_prior_enable_{true};
+  double multiview_position_prior_sigma_m_{0.08};
+  double multiview_position_min_coverage_{0.30};
+  int multiview_position_min_frames_{4};
+  std::unordered_set<LandmarkUid> position_prior_sent_;  // uids já com prior da nuvem
+  std::size_t position_priors_sent_{0};
+  // Pares de landmarks já ligados por um fator de constelação (canónico min<max).
+  // Dedup: o fator de rigidez entra UMA vez por par (bug #5: sem isto o mesmo par
+  // era religado a cada scan → grafo artificialmente rígido). Também é a fonte das
+  // ARESTAS de vizinhança no RViz (o utilizador vê que árvore liga a que vizinho).
+  std::set<std::pair<LandmarkUid, LandmarkUid>> constellation_pairs_;
 
   std::optional<Pose2> last_odom_pose_;
   // Histórico de odometria (stamp_sec, pose) para sincronizar com o tempo de
@@ -1055,6 +1674,21 @@ private:
 
   rclcpp::Subscription<forest_hybrid_msgs::msg::TreeLandmarkArray>::SharedPtr sub_landmarks_;
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_tree_clusters_;
+  rclcpp::Subscription<vision_msgs::msg::Detection2DArray>::SharedPtr sub_camera_dets_;
+  rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr sub_camera_info_;
+
+  // Fusão câmara→LiDAR (F2)
+  bool fusion_camera_enabled_{true};
+  std::string fusion_cam_topic_;
+  std::string fusion_cam_info_topic_;
+  double fusion_cam_sync_tol_ms_{150.0};
+  double fusion_cam_min_conf_{0.40};
+  Eigen::Vector3d cam_extrinsic_{0.40, 0.0, 0.24};
+  CameraIntrinsics cam_intrinsics_;
+  std::map<double, vision_msgs::msg::Detection2DArray::ConstSharedPtr> camera_dets_by_stamp_;
+  std::size_t cam_assoc_hits_{0};
+  std::size_t cam_assoc_attempts_{0};
+  std::size_t cam_fused_{0};  // nº de fusões de classe da câmara (F3)
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr sub_odom_;
   rclcpp::Subscription<forest_hybrid_msgs::msg::OperationMode>::SharedPtr sub_mode_;
   rclcpp::Subscription<forest_hybrid_msgs::msg::HybridHopStatus>::SharedPtr sub_hop_;

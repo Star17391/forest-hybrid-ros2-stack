@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <unordered_map>
 #include <vector>
 
@@ -32,6 +33,28 @@ struct TrackerParams
 
   // Birth: confiança mínima de uma deteção não associada para abrir um track.
   double birth_confidence{0.3};
+  // Birth: NÃO nascer landmark de deteções além deste alcance (m). A longa
+  // distância o bearing×range e a deteção de tronco degradam → nasciam fantasmas.
+  // Deteções além disto ainda ATUALIZAM landmarks existentes (associação), só não
+  // CRIAM novos. (Ver trunk_range_diagnosis: fiável até ~8 m.)
+  double birth_max_range_m{8.0};
+
+  // --- SCORER DINÂMICO (S) ---------------------------------------------------
+  // S em [0,1]: confiança de fiabilidade que CRESCE DEVAGAR com evidência boa e
+  // DESCE com medições fracas/incoerentes. credit = qualidade × novidade ×
+  // consistência; S += score_gain·credit·(1−S). A "novidade" depende de ver o
+  // tronco de ÂNGULOS NOVOS (paralaxe) → robô parado não satura a 1.
+  double score_gain{0.15};                 // α: crescimento lento
+  double score_novelty_repeat{0.1};        // crédito de um ângulo já visto (vs 1.0 novo)
+  double score_consistency_sigma_m{0.30};  // σ da consistência: exp(-resíduo/σ)
+  double score_inconsistent_residual_m{0.5};  // resíduo acima do qual PENALIZA
+  double score_penalty{0.10};              // β: quanto S desce numa obs incoerente
+  // Paralaxe: bins do bearing tronco→robô (360°/n). Promove só com ≥ N bins
+  // distintos (≥ N×passo de cobertura angular).
+  int parallax_bin_count{24};              // 24 bins de 15°
+  int promote_min_parallax_bins{4};        // ≥4 bins ≈ ≥60° de vistas distintas
+  // Promoção: S mínimo (existência) — a localização é garantida pela paralaxe.
+  double promote_score_min{0.5};
 
   // Dormência: nº de scans consecutivos sem associação antes de um track
   // PROMOVIDO (tronco/rocha, no grafo) passar a ADORMECIDO — fica no mapa
@@ -101,6 +124,14 @@ struct TrackerParams
   double promote_margin{0.20};
   std::uint32_t promote_min_obs{4};
 
+  // Fusão de classe da câmara (F3). O LiDAR satura a posterior num teto
+  // `fusion_class_c_lidar` (o resto vem da câmara); `fusion_class_w_cam` pesa o
+  // termo da câmara em log-odds. Com `fusion_class_w_cam=0`, a posterior fundida
+  // é idêntica à do LiDAR (regressão limpa / kill-switch).
+  double fusion_class_c_lidar{0.85};
+  double fusion_class_w_cam{1.0};
+  double fusion_class_cam_min_conf{0.40};
+
   MultiviewDbhParams multiview{};
 
   // --- Gate de ingestão multi-vista (decide se um frame ENTRA no buffer) ---
@@ -150,6 +181,13 @@ struct LandmarkTrack
   double diameter_var{0.01};  // variância acumulada do DBH [m²]
   Eigen::Matrix2d cov{Eigen::Matrix2d::Identity() * 0.1};  // cov 2x2 (x,y) acumulada
   double confidence{0.0};
+  // S: scorer dinâmico [0,1] (qualidade × novidade/paralaxe × consistência).
+  // É a confiança publicada e o gate de promoção (existência). Não decai com
+  // misses (só desce em observações fracas/incoerentes).
+  double score{0.0};
+  // Bitmask dos bins angulares (bearing tronco→robô) já observados — mede a
+  // PARALAXE (vistas de ângulos diferentes) p/ a confiança de LOCALIZAÇÃO.
+  std::uint32_t parallax_bins{0};
   std::uint32_t n_observations{0};
   int scans_since_seen{0};
   double last_seen_stamp_sec{0.0};
@@ -158,6 +196,11 @@ struct LandmarkTrack
   bool dormant{false};
 
   Eigen::Vector3d class_logodds{Eigen::Vector3d::Zero()};
+  // Acumulador SEPARADO da câmara (fusão F3): mantém-se à parte do LiDAR para o
+  // cap (o LiDAR satura num teto, a câmara fornece o resto). Índices [tronco,
+  // rocha, obstáculo], pós taxonomia 4→3.
+  Eigen::Vector3d class_logodds_cam{Eigen::Vector3d::Zero()};
+  double last_cam_bearing_rad{std::numeric_limits<double>::quiet_NaN()};
   std::uint8_t committed_class{kCommittedUnknown};
   double last_obs_bearing_rad{0.0};
   std::uint64_t class_coverage_bits{0};
@@ -218,7 +261,26 @@ public:
     const std::unordered_map<LandmarkUid, Eigen::Vector2d> & backend_positions);
 
   static Eigen::Vector3d class_posterior(const LandmarkTrack & track);
+
+  // Posterior FUNDIDA (F3): satura a do LiDAR num teto `fusion_class_c_lidar` e
+  // combina com o log-odds da câmara. Sem termo de câmara, == class_posterior.
+  // Não-static porque depende dos params (cap/peso). É esta que decide a promoção.
+  Eigen::Vector3d class_posterior_fused(const LandmarkTrack & track) const;
+
+  // Injeta a evidência da câmara para um landmark (chamado pelo nó após associar a
+  // deteção LiDAR à caixa do detetor). `class_idx` ∈ {0=tronco,1=rocha,2=obstáculo}
+  // (já pós taxonomia 4→3); `conf` é a confiança da câmara; `bearing_rad` é a
+  // direção do landmark (anti-correlação: não acumula parado). Re-tenta promover.
+  void fuse_camera_class(LandmarkUid uid, int class_idx, double conf, double bearing_rad);
+
+  // PROMOVIDO = entrou no grafo do backend (gate FROUXO: n_obs + classe). Frouxo
+  // de propósito para não esfomear o backend (existência).
   static bool is_promoted(const LandmarkTrack & track);
+  // CONFIRMADO = elegível para o MAPA/inventário (verde no RViz). Gate EXIGENTE:
+  // além de promovido, tem de ter sido visto de ÂNGULOS DISTINTOS (paralaxe ≥
+  // promote_min_parallax_bins) e com score de fiabilidade suficiente. Sem isto,
+  // uma árvore vista de UM só ângulo (4 frames em linha reta) ia para o mapa.
+  bool is_confirmed(const LandmarkTrack & track) const;
 
   /** Inliers de tree_clusters (map) para um uid associado neste scan. */
   void ingest_multiview_inliers(
@@ -231,7 +293,18 @@ private:
   Eigen::Matrix2d detection_covariance(const TreeDetection & d) const;
   double detection_diameter_variance(const TreeDetection & d) const;
   void fuse_position(LandmarkTrack & t, const TreeDetection & d) const;
+  // Committed (no grafo): a POSIÇÃO é do backend (sync_landmark_anchors), não se
+  // filtra das deteções. Mas a COVARIÂNCIA continua a encolher com a observação
+  // (e a inflar com o movimento na predição) para o gate de associação ficar são
+  // sob rotação/deriva. Atualiza só t.cov, deixa t.xy intacto.
+  void fuse_position_covariance_only(LandmarkTrack & t, const TreeDetection & d) const;
   void fuse_diameter(LandmarkTrack & t, const TreeDetection & d) const;
+  // Atualiza o scorer dinâmico S e os bins de paralaxe a partir de uma observação.
+  void update_score(
+    LandmarkTrack & t, const TreeDetection & d, const Eigen::Vector2d & robot_xy) const;
+  // Máscara do bin angular do bearing tronco→robô (paralaxe).
+  std::uint32_t bearing_bin_mask(
+    const Eigen::Vector2d & landmark_xy, const Eigen::Vector2d & robot_xy) const;
   double cost(const LandmarkTrack & t, const TreeDetection & d) const;
   bool mahalanobis_gate_ok(const LandmarkTrack & t, const TreeDetection & d) const;
 

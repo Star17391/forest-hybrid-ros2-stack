@@ -83,9 +83,15 @@ TEST(Tracker, AssociatesRepeatedDetectionNearSamePosition)
 
 TEST(Tracker, DoesNotAssociateFarDetection)
 {
-  LandmarkTracker tracker;
+  // Este teste valida o gate de ASSOCIAÇÃO (Mahalanobis), ortogonal ao gate de
+  // NASCIMENTO por alcance (birth_max_range_m). Neutraliza-se este último (alcance
+  // grande) para que a 2.ª deteção, mesmo longe, nasça como track separado em vez
+  // de ser silenciosamente descartada pelo gate de alcance.
+  forest_tree_slam::TrackerParams params;
+  params.birth_max_range_m = 1000.0;
+  LandmarkTracker tracker(params);
   tracker.update({make_det(0.0, 0.0, 0.3)}, 0.0);
-  // 10m de distância, fora do gate de Mahalanobis -> novo track
+  // 14m de distância (10,10), muito fora do gate de Mahalanobis -> novo track
   tracker.update({make_det(10.0, 10.0, 0.3)}, 1.0);
   EXPECT_EQ(tracker.tracks().size(), 2u);
 }
@@ -145,6 +151,11 @@ TEST(Tracker, GeometricReassociationReawakensDormantInsteadOfBirthing)
   forest_tree_slam::TrackerParams params;
   params.death_age_scans = 2;
   params.enable_geometric_reassoc = true;
+  // Neutraliza o gate de NASCIMENTO por alcance (ortogonal a este teste): na
+  // constelação abaixo, árvores como (6,5) ficam a >8 m de 3 das 4 vistas e só
+  // nasceriam na última vista (n_obs=1, nunca promovidas), mascarando o que aqui
+  // se valida — a RE-ASSOCIAÇÃO geométrica de landmarks já promovidos.
+  params.birth_max_range_m = 1000.0;
   LandmarkTracker tracker(params);
 
   // Constelação assimétrica de 5 troncos (sem simetrias -> match não ambíguo).
@@ -201,6 +212,57 @@ TEST(Tracker, GeometricReassociationReawakensDormantInsteadOfBirthing)
   }
 }
 
+TEST(Tracker, GeometricReassociationPrimaryCatchesActiveDriftedLandmark)
+{
+  // Associação inter-troncos como via PRIMÁRIA: um landmark ATIVO (nunca
+  // adormeceu) cuja deteção deriva para fora do gate de posição tem de ser
+  // re-associado por geometria de vizinhança, NÃO gerar um duplicado. Antes, a
+  // re-associação geométrica só corria se existissem adormecidos (n_dormant>0),
+  // logo este caso nascia um uid novo. Agora corre sempre que há mapa+deteções.
+  forest_tree_slam::TrackerParams params;
+  params.enable_geometric_reassoc = true;
+  params.birth_max_range_m = 1000.0;  // ortogonal (ver teste dos adormecidos).
+  LandmarkTracker tracker(params);
+
+  const std::array<std::pair<double, double>, 5> pts = {{
+    {0.0, 0.0}, {6.0, 0.0}, {0.0, 5.0}, {6.0, 5.0}, {3.0, 8.0}}};
+  const std::array<double, 5> diam = {0.30, 0.34, 0.28, 0.33, 0.37};
+  const auto td = scores_trunk_dominant();
+  auto make_scan = [&](double dx, double dy) {
+      std::vector<TreeDetection> v;
+      for (std::size_t k = 0; k < pts.size(); ++k) {
+        v.push_back(make_det(pts[k].first + dx, pts[k].second + dy, diam[k], 0.9F, 0.0F, 0.0, td));
+      }
+      return v;
+    };
+
+  // 4 vistas → promove os 5 a tronco. Ficam ATIVOS (sem scans vazios a seguir).
+  const std::array<Eigen::Vector2d, 4> views = {
+    Eigen::Vector2d(-3, -3), Eigen::Vector2d(9, -3),
+    Eigen::Vector2d(-3, 8), Eigen::Vector2d(9, 8)};
+  for (std::size_t s = 0; s < views.size(); ++s) {
+    tracker.update(make_scan(0.0, 0.0), 0.1 * static_cast<double>(s), views[s]);
+  }
+  ASSERT_EQ(tracker.tracks().size(), 5u);
+  std::vector<forest_tree_slam::LandmarkUid> orig_uids;
+  for (const auto & t : tracker.tracks()) {
+    ASSERT_TRUE(LandmarkTracker::is_promoted(t));
+    ASSERT_FALSE(t.dormant) << "ainda ativos (não adormeceram)";
+    orig_uids.push_back(t.uid);
+  }
+
+  // Scan seguinte COM DERIVA (3 m em x), sem qualquer scan vazio → landmarks
+  // continuam ATIVOS. O gate de posição falha; só a geometria re-associa.
+  auto report = tracker.update(make_scan(3.0, 0.0), 1.0);
+
+  EXPECT_TRUE(report.births.empty()) << "landmark ativo derivado não pode duplicar";
+  EXPECT_EQ(tracker.tracks().size(), 5u) << "sem duplicados";
+  for (auto uid : report.detection_to_uid) {
+    EXPECT_NE(uid, 0u);
+    EXPECT_NE(std::find(orig_uids.begin(), orig_uids.end(), uid), orig_uids.end());
+  }
+}
+
 TEST(Tracker, SyncLandmarkAnchorsReassociatesDormantAfterBackendCorrection)
 {
   // Passo 1 (frame consistente): o backend corrige a posição de um landmark
@@ -241,12 +303,12 @@ TEST(Tracker, SyncLandmarkAnchorsReassociatesDormantAfterBackendCorrection)
   EXPECT_FALSE(tracker.tracks().front().dormant);
 }
 
-// VALIDAÇÃO da pergunta do utilizador: "a confiança devia melhorar com vistas
-// de ângulos diferentes e persistir — porque está a 0?". Prova que existem DUAS
-// quantidades distintas: a confiança de CLASSIFICAÇÃO (class_posterior) acumula
-// com vistas diversas e PERSISTE; o campo track.confidence (o que publicamos em
-// m.confidence) é só RECÊNCIA e decai a ~0 quando o landmark sai de vista.
-TEST(Tracker, ClassificationConfidenceAccumulatesAndPersists_ButTrackConfidenceIsRecency)
+// Existem DUAS quantidades distintas: a confiança de CLASSIFICAÇÃO
+// (class_posterior) acumula com vistas diversas e PERSISTE; o campo
+// track.confidence (o que publicamos em m.confidence) é a QUALIDADE das deteções
+// (média móvel/EMA da confiança por-deteção, que escala com arco/distância/base —
+// já NÃO rampa a 1.0 por contagem) e ainda decai com os misses (recência).
+TEST(Tracker, ClassificationConfidenceAccumulatesAndPersists_ButTrackConfidenceIsQuality)
 {
   LandmarkTracker tracker;
   const auto td = scores_trunk_dominant();
@@ -264,7 +326,9 @@ TEST(Tracker, ClassificationConfidenceAccumulatesAndPersists_ButTrackConfidenceI
   EXPECT_GT(last_post, 0.95);
   EXPECT_GE(last_post, first_post);
   const auto uid = tracker.tracks().front().uid;
-  EXPECT_GT(tracker.tracks().front().confidence, 0.9);  // recência alta enquanto visto
+  // track.confidence segue a QUALIDADE da deteção (aqui d.confidence=0.9) via EMA,
+  // já não rampa a 1.0 por contagem. Converge para ~0.9 enquanto visto.
+  EXPECT_NEAR(tracker.tracks().front().confidence, 0.9, 0.06);
 
   // (2) Muitos scans SEM ver: track.confidence (recência) decai a ~0, MAS o
   //     posterior de classificação MANTÉM-SE alto (a evidência persiste).
@@ -562,16 +626,17 @@ TEST(Tracker, ClassLogOddsConvergesDespiteMinorityFrames)
   params.promote_prob = 0.55;
   params.promote_margin = 0.10;
   LandmarkTracker tracker(params);
-  const Eigen::Vector2d robot{0.0, 0.0};
 
+  // Árvore FIXA em (5,0); o robô ORBITA-a (multi-vista física). Bearings distintos
+  // dão vistas novas à acumulação de classe, sem mover a deteção no mundo — assim a
+  // posição do committed (dona do grafo) fica estável e não nasce duplicado.
   for (int i = 0; i < 8; ++i) {
     const bool minority = (i % 4) == 3;
     const auto scores = minority ? scores_rock_dominant() : scores_trunk_dominant();
     const double angle = static_cast<double>(i) * 0.4;
-    const double x = 5.0 * std::cos(angle);
-    const double y = 5.0 * std::sin(angle);
-    tracker.update({make_det(x, y, 0.35, 0.9F, 0.0F, 0.0, scores)}, static_cast<double>(i), robot,
-      0.4);
+    const Eigen::Vector2d robot(5.0 - 4.0 * std::cos(angle), -4.0 * std::sin(angle));
+    tracker.update({make_det(5.0, 0.0, 0.35, 0.9F, 0.0F, 0.0, scores)}, static_cast<double>(i),
+      robot, 0.4);
   }
 
   ASSERT_EQ(tracker.tracks().size(), 1u);
@@ -641,16 +706,17 @@ TEST(Tracker, StationaryRepeatsDoNotInflateClassEvidence)
     static_logodds_spread = lo[0] - lo[1];  // separação tronco vs rocha
   }
 
-  // Caso B — robô orbita: cada observação chega de um ângulo distinto (vista nova).
+  // Caso B — robô orbita uma árvore FIXA em (5,0): cada observação chega de um
+  // ângulo distinto (vista nova). É a árvore que fica parada e o robô que se move
+  // (multi-vista física) — assim mede-se a evidência por bearings distintos sem
+  // deslocar a deteção no mundo.
   double orbit_logodds_spread = 0.0;
   {
     LandmarkTracker tracker;
-    const Eigen::Vector2d robot{0.0, 0.0};
     for (int i = 0; i < kObs; ++i) {
       const double angle = static_cast<double>(i) * (2.0 * M_PI / kObs);
-      const double x = 5.0 * std::cos(angle);
-      const double y = 5.0 * std::sin(angle);
-      tracker.update({make_det(x, y, 0.35, 0.9F, 0.0F, 0.0, scores)},
+      const Eigen::Vector2d robot(5.0 - 4.0 * std::cos(angle), -4.0 * std::sin(angle));
+      tracker.update({make_det(5.0, 0.0, 0.35, 0.9F, 0.0F, 0.0, scores)},
         static_cast<double>(i), robot, 2.0 * M_PI / kObs);
     }
     ASSERT_EQ(tracker.tracks().size(), 1u);
@@ -663,4 +729,110 @@ TEST(Tracker, StationaryRepeatsDoNotInflateClassEvidence)
   // claramente maior — pelo menos ~2x — para o mesmo nº de frames.
   EXPECT_GT(orbit_logodds_spread, 2.0 * static_logodds_spread)
     << "estático=" << static_logodds_spread << " orbital=" << orbit_logodds_spread;
+}
+
+// ── F3: fusão de classe da câmara ──────────────────────────────────────────
+
+TEST(TrackerCameraFusion, NoCameraEvidenceIsExactKillSwitch)
+{
+  // Sem termo de câmara, a posterior fundida == posterior do LiDAR (o cap nem
+  // atua). Garante que fusion desligada reproduz o baseline bit-a-bit.
+  LandmarkTracker tracker;
+  forest_tree_slam::LandmarkTrack t;
+  t.class_logodds = Eigen::Vector3d(2.0, 0.5, 0.1);
+  // t.class_logodds_cam fica a zero (default).
+  const Eigen::Vector3d fused = tracker.class_posterior_fused(t);
+  const Eigen::Vector3d lidar = LandmarkTracker::class_posterior(t);
+  EXPECT_TRUE(fused.isApprox(lidar, 1e-12));
+}
+
+TEST(TrackerCameraFusion, CameraTrunkEvidenceFlipsAmbiguousLidar)
+{
+  // LiDAR ambíguo com a rocha ligeiramente à frente; a câmara diz TRONCO com
+  // força → a posterior fundida passa a favorecer o tronco.
+  LandmarkTracker tracker;
+  forest_tree_slam::LandmarkTrack t;
+  t.class_logodds = Eigen::Vector3d(1.0, 1.5, 0.0);  // rocha > tronco (LiDAR)
+  const Eigen::Vector3d before = LandmarkTracker::class_posterior(t);
+  ASSERT_GT(before[1], before[0]);
+
+  t.class_logodds_cam = Eigen::Vector3d(3.0, 0.0, 0.0);  // câmara: tronco
+  const Eigen::Vector3d fused = tracker.class_posterior_fused(t);
+  EXPECT_GT(fused[0], fused[1]);      // tronco passa a dominar
+  EXPECT_GT(fused[0], before[0]);     // e subiu face ao LiDAR-only
+}
+
+TEST(TrackerCameraFusion, ConfidentLidarIsCappedWhenCameraPresent)
+{
+  // LiDAR quase certo em rocha; com câmara (mesmo só a concordar pouco), a
+  // componente do LiDAR satura no teto c_lidar (não fica perto de 1).
+  forest_tree_slam::TrackerParams params;
+  params.fusion_class_c_lidar = 0.85;
+  LandmarkTracker tracker(params);
+  forest_tree_slam::LandmarkTrack t;
+  t.class_logodds = Eigen::Vector3d(0.0, 8.0, 0.0);   // rocha ~1.0 no LiDAR
+  ASSERT_GT(LandmarkTracker::class_posterior(t)[1], 0.99);
+  t.class_logodds_cam = Eigen::Vector3d(0.0, 0.2, 0.0);  // câmara concorda fraco
+  const Eigen::Vector3d fused = tracker.class_posterior_fused(t);
+  EXPECT_LT(fused[1], 0.90);  // capado: já não está colado a 1
+}
+
+TEST(TrackerCameraFusion, CameraConfirmationPromotesAmbiguousLidar)
+{
+  // LiDAR vê um objeto AMBÍGUO (tronco/rocha equilibrados) de vários ângulos →
+  // n_obs sobe mas NÃO promove (margem insuficiente). A câmara confirma TRONCO
+  // de vários ângulos → cruza o limiar e promove a tronco.
+  LandmarkTracker tracker;
+  const std::array<float, 3> ambiguous = {0.45F, 0.45F, 0.10F};
+  forest_tree_slam::LandmarkUid uid = 0;
+  for (int i = 0; i < 8; ++i) {
+    auto rep = tracker.update(
+      {make_det(5.0, 0.0, 0.3, 0.9F, 0.0F, 0.0, ambiguous)}, static_cast<double>(i),
+      Eigen::Vector2d(0.0, static_cast<double>(i) * 2.0));  // robô move em Y → Δbearing
+    if (!rep.births.empty()) {uid = rep.births[0];}
+  }
+  ASSERT_NE(uid, 0u);
+  ASSERT_NE(tracker.find_track(uid), nullptr);
+  EXPECT_EQ(tracker.find_track(uid)->committed_class, forest_tree_slam::kCommittedUnknown)
+    << "LiDAR ambíguo sozinho não deve promover";
+
+  for (int i = 0; i < 8; ++i) {
+    tracker.fuse_camera_class(uid, 0 /*tronco*/, 0.85, static_cast<double>(i) * 0.3);
+  }
+  EXPECT_EQ(tracker.find_track(uid)->committed_class, forest_tree_slam::kCommittedTrunk)
+    << "a confirmação da câmara deve promover a tronco";
+}
+
+TEST(TrackerCameraFusion, WeakCameraDetectionIsIgnored)
+{
+  // Deteção de câmara abaixo de cam_min_conf não altera o log-odds.
+  forest_tree_slam::TrackerParams params;
+  params.fusion_class_cam_min_conf = 0.40;
+  LandmarkTracker tracker(params);
+  auto rep = tracker.update({make_det(3.0, 0.0, 0.3)}, 0.0);
+  ASSERT_FALSE(rep.births.empty());
+  const auto uid = rep.births[0];
+  tracker.fuse_camera_class(uid, 0, 0.30 /*< min_conf*/, 0.0);
+  EXPECT_TRUE(tracker.find_track(uid)->class_logodds_cam.isZero(0.0));
+}
+
+TEST(TrackerCameraFusion, AntiCorrelationBlocksSameBearing)
+{
+  // A câmara não deve "encher" o log-odds parada: duas fusões do MESMO bearing
+  // só contam uma; um bearing novo volta a acumular.
+  LandmarkTracker tracker;
+  auto rep = tracker.update({make_det(5.0, 0.0, 0.3)}, 0.0);
+  ASSERT_FALSE(rep.births.empty());
+  const auto uid = rep.births[0];
+
+  tracker.fuse_camera_class(uid, 0, 0.85, 0.50);            // 1ª: acumula
+  const Eigen::Vector3d a = tracker.find_track(uid)->class_logodds_cam;
+  EXPECT_GT(a[0], 0.0);
+
+  tracker.fuse_camera_class(uid, 0, 0.85, 0.50);            // mesmo bearing: bloqueia
+  const Eigen::Vector3d b = tracker.find_track(uid)->class_logodds_cam;
+  EXPECT_TRUE(a.isApprox(b)) << "não devia acumular com o mesmo bearing";
+
+  tracker.fuse_camera_class(uid, 0, 0.85, 1.00);            // bearing novo: acumula
+  EXPECT_GT(tracker.find_track(uid)->class_logodds_cam[0], b[0]);
 }

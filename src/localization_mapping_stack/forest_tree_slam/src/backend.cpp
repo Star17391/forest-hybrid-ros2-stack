@@ -144,6 +144,18 @@ void TreeSlamBackend::add_relocalization_factor(
   add_tree_observation(uid, keyframe_index, bearing_rad, range_m, guess);
 }
 
+void TreeSlamBackend::add_landmark_position_prior(
+  LandmarkUid uid, const Eigen::Vector2d & xy_world, const Eigen::Vector2d & sigma)
+{
+  if (landmark_keys_.find(uid) == landmark_keys_.end()) {
+    return;  // só landmarks já inseridos no grafo
+  }
+  const auto noise = robustify(
+    gtsam::noiseModel::Diagonal::Sigmas(gtsam::Vector2(sigma.x(), sigma.y())));
+  new_factors_.addPrior(landmark_key(uid), gtsam::Point2(xy_world.x(), xy_world.y()), noise);
+  dirty_ = true;
+}
+
 void TreeSlamBackend::add_constellation_distance(
   LandmarkUid uid_a, LandmarkUid uid_b, double distance_m)
 {
