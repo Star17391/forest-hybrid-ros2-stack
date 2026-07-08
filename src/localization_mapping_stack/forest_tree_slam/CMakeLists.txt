@@ -58,6 +58,12 @@ install(TARGETS tree_slam_node tree_slam_core
 )
 install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 
+# Headers exportados: outros pacotes (ex.: forest_traversability_mapping)
+# reutilizam a aritmética dos tiles (tile_map.hpp) — fonte única da partição.
+install(DIRECTORY include/ DESTINATION include)
+ament_export_include_directories(include)
+ament_export_dependencies(Eigen3)
+
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
 

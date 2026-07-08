@@ -36,7 +36,9 @@
 #include <vector>
 
 #include "forest_hybrid_msgs/msg/tracked_tree_landmark_array.hpp"
+#include "forest_tree_slam/tile_map.hpp"
 #include "geometry_msgs/msg/point_stamped.hpp"
+#include "geometry_msgs/msg/pose_array.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "grid_map_msgs/msg/grid_map.hpp"
 #include "grid_map_ros/grid_map_ros.hpp"
@@ -106,6 +108,13 @@ public:
     commit_radius_ema_ = declare_parameter<double>("commit_radius_ema", 0.2);      // histerese do raio
     committed_cloud_perim_pts_ = declare_parameter<int>("committed_cloud_perim_pts", 12);
 
+    // Tiles de terreno persistentes (FUTURE_TILED_MAPS.md): mesma particao fixa
+    // do forest_tree_slam (tile (0,0) centrado na origem do mundo). O terreno
+    // NUNCA e esquecido; a janela de saida e reconstruida dos tiles. Cada tile
+    // ancora a keyframe do grafo em vigor na criacao e segue-a no loop closure.
+    const double tile_size_m = declare_parameter<double>("tile_size_m", 20.0);
+    tile_grid_ = std::make_unique<forest_tree_slam::TileGrid>(tile_size_m);
+
     map_ = grid_map::GridMap(
       {"elevation", "elevation_smooth", "variance",
        "cost_terrain", "cost_obstacle", cost_layer_});
@@ -130,6 +139,10 @@ public:
     sub_tree_map_ = create_subscription<forest_hybrid_msgs::msg::TrackedTreeLandmarkArray>(
       tree_map_topic_, rclcpp::QoS(10),
       std::bind(&TraversabilityMappingNode::on_tree_map, this, std::placeholders::_1));
+    // Poses otimizadas das keyframes do grafo (indice = id): ancoras dos tiles.
+    sub_keyframes_ = create_subscription<geometry_msgs::msg::PoseArray>(
+      "/slam/keyframes", rclcpp::QoS(10),
+      std::bind(&TraversabilityMappingNode::on_keyframes, this, std::placeholders::_1));
     pub_committed_ = create_publisher<sensor_msgs::msg::PointCloud2>(
       "/mapping/committed_obstacles", rclcpp::QoS(1).transient_local());
 
@@ -157,6 +170,42 @@ private:
     std::uint8_t semantic_class{0};
   };
 
+  // Pose SE(2) minima para as ancoras (evita depender do GTSAM aqui).
+  struct Se2
+  {
+    double x{0.0}, y{0.0}, theta{0.0};
+  };
+  static Se2 se2_inverse(const Se2 & p)
+  {
+    const double c = std::cos(p.theta), s = std::sin(p.theta);
+    return {-c * p.x - s * p.y, s * p.x - c * p.y, -p.theta};
+  }
+  static Se2 se2_compose(const Se2 & a, const Se2 & b)
+  {
+    const double c = std::cos(a.theta), s = std::sin(a.theta);
+    return {a.x + c * b.x - s * b.y, a.y + s * b.x + c * b.y, a.theta + b.theta};
+  }
+  static Eigen::Vector2d se2_apply(const Se2 & t, const Eigen::Vector2d & p)
+  {
+    const double c = std::cos(t.theta), s = std::sin(t.theta);
+    return {t.x + c * p.x() - s * p.y(), t.y + s * p.x() + c * p.y()};
+  }
+
+  // TILE de terreno persistente (FUTURE_TILED_MAPS.md + decisao 2026-07):
+  // cobre os limites FIXOS do tile em coordenadas do mundo e NUNCA e esquecido.
+  // O conteudo fica ANCORADO a keyframe do grafo (iSAM2) mais recente no
+  // momento da criacao: as celulas foram escritas com a estimativa dessa era
+  // (pose A0). Quando o loop closure move a ancora para A_now, o tile e lido
+  // atraves da correcao rigida delta = A_now ∘ A0⁻¹ — o terreno acompanha a
+  // otimizacao do grafo sem re-integrar medicoes. Dentro de um tile o drift e
+  // pequeno (troco curto), por isso a correcao rigida e uma boa aproximacao.
+  struct TerrainTile
+  {
+    grid_map::GridMap grid;     // layers: elevation, variance (frame da era A0)
+    int anchor_kf{-1};          // id da keyframe-ancora (-1 = pre-SLAM, delta=I)
+    Se2 anchor_at_creation{};   // A0: pose da ancora quando o tile nasceu
+  };
+
   void reset_layers()
   {
     map_["elevation"].setConstant(NAN);
@@ -180,11 +229,12 @@ private:
   }
 
   // Kalman 1D por celula: funde uma medicao de altura z com variancia R.
-  void update_cell(const grid_map::Index & idx, float z, float meas_var)
+  // Opera sobre o grid do TILE (persistente), nao sobre a janela de saida.
+  void update_cell(grid_map::GridMap & g, const grid_map::Index & idx, float z, float meas_var)
   {
-    float & h = map_.at("elevation", idx);
-    float & v = map_.at("variance", idx);
-    if (std::isnan(h)) {  // primeira observacao (ou celula nova pos-move)
+    float & h = g.at("elevation", idx);
+    float & v = g.at("variance", idx);
+    if (std::isnan(h)) {  // primeira observacao
       h = z;
       v = meas_var;
       return;
@@ -198,6 +248,108 @@ private:
     const float k = v / s;
     h += k * innovation;
     v = std::max(static_cast<float>((1.0f - k) * v), static_cast<float>(var_min_));
+  }
+
+  // Tile que contem a posicao (cria-o na 1.ª visita, ancorado a keyframe do
+  // SLAM mais recente). A grelha de tiles e FIXA: tile (0,0) centrado na
+  // origem do mundo — mesma particao do forest_tree_slam (tile_map.hpp).
+  TerrainTile & tile_at(const forest_tree_slam::TileIndex & t)
+  {
+    auto it = terrain_tiles_.find(t);
+    if (it != terrain_tiles_.end()) {
+      return it->second;
+    }
+    TerrainTile tile;
+    tile.grid = grid_map::GridMap({"elevation", "variance"});
+    tile.grid.setFrameId(map_frame_);
+    const Eigen::Vector2d c = tile_grid_->center_of(t);
+    tile.grid.setGeometry(
+      grid_map::Length(tile_grid_->tile_size(), tile_grid_->tile_size()),
+      resolution_, grid_map::Position(c.x(), c.y()));
+    tile.grid["elevation"].setConstant(NAN);
+    tile.grid["variance"].setConstant(NAN);
+    if (!keyframes_.empty()) {
+      tile.anchor_kf = static_cast<int>(keyframes_.size()) - 1;
+      tile.anchor_at_creation = keyframes_.back();
+    }
+    auto res = terrain_tiles_.emplace(t, std::move(tile));
+    RCLCPP_INFO(
+      get_logger(), "terreno: tile novo (%d,%d) ancora=kf%d (total %zu tiles)",
+      t.r, t.c, res.first->second.anchor_kf, terrain_tiles_.size());
+    return res.first->second;
+  }
+
+  // Correcao rigida do tile: delta = A_now ∘ A0⁻¹ (I se a ancora nao mexeu ou
+  // o tile e pre-SLAM). A_now vem do /slam/keyframes (poses otimizadas iSAM2).
+  Se2 tile_delta(const TerrainTile & tile) const
+  {
+    if (tile.anchor_kf < 0 ||
+      static_cast<std::size_t>(tile.anchor_kf) >= keyframes_.size())
+    {
+      return {};
+    }
+    return se2_compose(
+      keyframes_[static_cast<std::size_t>(tile.anchor_kf)],
+      se2_inverse(tile.anchor_at_creation));
+  }
+
+  void on_keyframes(const geometry_msgs::msg::PoseArray::SharedPtr msg)
+  {
+    keyframes_.clear();
+    keyframes_.reserve(msg->poses.size());
+    for (const auto & p : msg->poses) {
+      const double yaw = 2.0 * std::atan2(p.orientation.z, p.orientation.w);
+      keyframes_.push_back({p.position.x, p.position.y, yaw});
+    }
+  }
+
+  // Reconstrói elevation/variance da janela de saida a partir dos tiles que
+  // intersectam a vizinhanca do robo, aplicando a correcao rigida de cada tile.
+  // Empate em overlaps: ganha a celula com MENOR variancia (mais confiante).
+  void stitch_tiles_into_window(const Eigen::Vector2d & robot)
+  {
+    map_["elevation"].setConstant(NAN);
+    map_["variance"].setConstant(NAN);
+    // Raio que garante cobrir a janela inteira a partir do centro (meia
+    // diagonal) + margem de um tile para as correcoes rigidas nas bordas.
+    const double half_diag = 0.5 * std::hypot(
+      map_.getLength().x(), map_.getLength().y());
+    const double radius = half_diag + tile_grid_->tile_size();
+    for (const auto & t : tile_grid_->tiles_in_radius(robot, radius)) {
+      const auto it = terrain_tiles_.find(t);
+      if (it == terrain_tiles_.end()) {
+        continue;
+      }
+      const TerrainTile & tile = it->second;
+      const Se2 delta = tile_delta(tile);
+      const bool identity =
+        std::abs(delta.x) < 1e-9 && std::abs(delta.y) < 1e-9 &&
+        std::abs(delta.theta) < 1e-9;
+      for (grid_map::GridMapIterator gi(tile.grid); !gi.isPastEnd(); ++gi) {
+        const float h = tile.grid.at("elevation", *gi);
+        if (std::isnan(h)) {
+          continue;
+        }
+        grid_map::Position p;
+        tile.grid.getPosition(*gi, p);
+        const Eigen::Vector2d q = identity ?
+          Eigen::Vector2d(p.x(), p.y()) :
+          se2_apply(delta, Eigen::Vector2d(p.x(), p.y()));
+        const grid_map::Position out_pos(q.x(), q.y());
+        if (!map_.isInside(out_pos)) {
+          continue;
+        }
+        grid_map::Index oi;
+        map_.getIndex(out_pos, oi);
+        const float v = tile.grid.at("variance", *gi);
+        float & oh = map_.at("elevation", oi);
+        float & ov = map_.at("variance", oi);
+        if (std::isnan(oh) || v < ov) {
+          oh = h;
+          ov = v;
+        }
+      }
+    }
   }
 
   // Transformada odom<-sensor com pitch/roll reais do IMU (a TF da EKF e 2D).
@@ -267,16 +419,20 @@ private:
       if (r2 > r2_max) {
         continue;
       }
-      const grid_map::Position pos(*ix, *iy);
-      if (!map_.isInside(pos)) {
-        continue;
+      // Insercao no TILE persistente (grelha fixa), nao na janela de saida:
+      // o terreno nunca e esquecido; a janela e reconstruida dos tiles no timer.
+      const Eigen::Vector2d pw(*ix, *iy);
+      TerrainTile & tile = tile_at(tile_grid_->index_of(pw));
+      const grid_map::Position pos(pw.x(), pw.y());
+      if (!tile.grid.isInside(pos)) {
+        continue;  // borda numerica (ponto exatamente na fronteira)
       }
       grid_map::Index idx;
-      map_.getIndex(pos, idx);
+      tile.grid.getIndex(pos, idx);
       const double range = std::sqrt(r2);
       const float meas_var =
         static_cast<float>(meas_var_base_ + std::pow(meas_var_range_k_ * range, 2.0));
-      update_cell(idx, *iz, meas_var);
+      update_cell(tile.grid, idx, *iz, meas_var);
       ++used;
     }
     last_ground_used_ = used;
@@ -518,6 +674,16 @@ private:
       map_.convertToDefaultStartIndex();
     }
 
+    // A janela de saida e RECONSTRUIDA dos tiles persistentes a cada tick
+    // (o terreno vive nos tiles, nunca e esquecido; a janela e so a vista
+    // local para o custo/Nav2). Cada tile entra pela sua correcao rigida
+    // delta = A_now ∘ A0⁻¹ — o loop closure do iSAM2 move a ancora e o
+    // terreno acompanha sem re-integrar medicoes.
+    if (have_pose) {
+      stitch_tiles_into_window(
+        Eigen::Vector2d(tf.transform.translation.x, tf.transform.translation.y));
+    }
+
     if (smooth_enable_) {
       smooth_elevation();
     } else {
@@ -547,9 +713,9 @@ private:
 
     RCLCPP_INFO_THROTTLE(
       get_logger(), *get_clock(), 5000,
-      "elevation: %zu pontos/scan, imu=%s | obstaculos comprometidos (SLAM)=%zu",
-      last_ground_used_, (use_imu_attitude_ && have_imu_) ? "on" : "off/sem-imu",
-      committed_.size());
+      "elevation: %zu pontos/scan | tiles de terreno=%zu (persistentes) | "
+      "keyframes=%zu | obstaculos comprometidos (SLAM)=%zu",
+      last_ground_used_, terrain_tiles_.size(), keyframes_.size(), committed_.size());
   }
 
   // Cilindros castanhos por primitiva de tronco; altura/alpha ∝ confianca.
@@ -619,6 +785,10 @@ private:
   double robot_x_{0.0}, robot_y_{0.0};
   size_t last_ground_used_{0};
   std::map<std::uint64_t, Committed> committed_;
+  // Tiles de terreno persistentes (grelha fixa; conteudo ancorado a keyframes).
+  std::unique_ptr<forest_tree_slam::TileGrid> tile_grid_;
+  std::map<forest_tree_slam::TileIndex, TerrainTile> terrain_tiles_;
+  std::vector<Se2> keyframes_;  // poses otimizadas (indice = id da keyframe)
 
   grid_map::GridMap map_;
   tf2_ros::Buffer tf_buffer_;
@@ -626,6 +796,7 @@ private:
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_ground_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr sub_imu_;
   rclcpp::Subscription<forest_hybrid_msgs::msg::TrackedTreeLandmarkArray>::SharedPtr sub_tree_map_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr sub_keyframes_;
   rclcpp::Publisher<grid_map_msgs::msg::GridMap>::SharedPtr pub_grid_;
   rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr pub_costmap_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_committed_;
