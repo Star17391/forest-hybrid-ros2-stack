@@ -740,6 +740,17 @@ private:
            is_slam_graph_class(track->committed_class);
   }
 
+  // Gate mais exigente para RIGIDEZ DE CONSTELAÇÃO (e respetiva viz): só
+  // landmarks CONFIRMADOS (promovido + paralaxe + score — o gate do inventário
+  // /slam/tree_map). Um par com um fantasma promovido-mas-não-confirmado ficava
+  // no grafo (e no RViz) para sempre — as "ligações duplicadas/com fantasmas".
+  bool feeds_constellation(LandmarkUid uid) const
+  {
+    const auto * track = find_track(uid);
+    return track != nullptr && tracker_->is_confirmed(*track) &&
+           is_slam_graph_class(track->committed_class);
+  }
+
   // Fase 1 — alinhamento de constelação local. Dada a constelação observada
   // (deteções já em mundo, com a pose PREVISTA/derivada) e o mapa local
   // (landmarks do grafo num raio à volta da pose prevista), estima a SE(2) `T`
@@ -989,7 +1000,9 @@ private:
     for (std::size_t a = 0; a < msg->trees.size(); ++a) {
       for (std::size_t b = a + 1; b < msg->trees.size(); ++b) {
         const LandmarkUid ua = report.detection_to_uid[a], ub = report.detection_to_uid[b];
-        if (ua == 0 || ub == 0 || !feeds_pose_graph(ua) || !feeds_pose_graph(ub)) {
+        // Gate CONFIRMADO (não só promovido): rigidez entre fantasmas fica
+        // permanente no grafo — só ligar pares em que ambos são inventário.
+        if (ua == 0 || ub == 0 || !feeds_constellation(ua) || !feeds_constellation(ub)) {
           continue;
         }
         // Dedup (bug #5): liga cada par UMA vez. Repetir o mesmo fator a cada scan
@@ -1481,6 +1494,11 @@ private:
       edges.pose.orientation.w = 1.0;
       for (const auto & pr : constellation_pairs_) {
         if (!backend_->has_landmark(pr.first) || !backend_->has_landmark(pr.second)) {
+          continue;
+        }
+        // Desenhar só arestas cujos DOIS extremos ainda são confirmados: uma
+        // aresta a um landmark que caiu do inventário é a "ligação fantasma".
+        if (!feeds_constellation(pr.first) || !feeds_constellation(pr.second)) {
           continue;
         }
         const Eigen::Vector2d pa = backend_->landmark_position(pr.first);

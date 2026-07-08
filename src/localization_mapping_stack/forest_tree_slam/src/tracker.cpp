@@ -572,12 +572,15 @@ void LandmarkTracker::geometric_reassociate(
     return;  // nada por re-associar.
   }
 
-  // Mapa = landmarks promovidos no grafo (ativos + adormecidos). É o conjunto
-  // persistente contra o qual casamos o padrão geométrico.
+  // Mapa = landmarks CONFIRMADOS no grafo (ativos + adormecidos). Confirmado
+  // (promovido + paralaxe + score), não só promovido: fantasmas/duplicados
+  // promovem cedo e envenenavam o consenso — correspondência a um fantasma vira
+  // fator bearing-range ao uid errado e puxa o grafo (a causa do map->odom
+  // saltar mal e arrastar o terreno). Mesmo gate do inventário /slam/tree_map.
   std::vector<LandmarkPoint> map_points;
   std::size_t n_dormant = 0;
   for (const auto & t : tracks_) {
-    if (!is_promoted(t) || !is_slam_graph_class(t.committed_class)) {
+    if (!is_confirmed(t) || !is_slam_graph_class(t.committed_class)) {
       continue;
     }
     map_points.push_back(LandmarkPoint{t.uid, t.xy.x(), t.xy.y(), t.diameter});

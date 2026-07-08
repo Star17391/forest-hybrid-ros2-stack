@@ -59,6 +59,17 @@ struct RelocalizerParams
   double diameter_residual_threshold_m{0.2};
   double min_overlap_ratio{0.6};
   int min_correspondences{5};
+
+  // --- Anti-falso-match (guarda nº5 do plano de robustez) ---
+  // Só aceitar se a melhor hipótese bater a 2.ª melhor DISTINTA por uma margem
+  // clara de inliers. Em floresta auto-semelhante, duas transformações
+  // diferentes com apoio quase igual = match ambíguo → recusar (um match errado
+  // é catastrófico: fator ao uid errado puxa o grafo inteiro).
+  int accept_margin_inliers{2};
+  // Hipóteses contam como DISTINTAS se diferirem mais do que isto (senão são o
+  // mesmo cluster da hipótese certa a competir consigo próprio).
+  double distinct_transform_translation_m{0.5};
+  double distinct_transform_rotation_rad{0.15};
 };
 
 // Relocalizador = loop closure unificado (TDH coarse + triângulo fine +

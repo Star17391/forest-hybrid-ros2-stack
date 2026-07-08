@@ -5,6 +5,7 @@
 #include <limits>
 #include <map>
 #include <numeric>
+#include <set>
 
 namespace forest_tree_slam
 {
@@ -207,6 +208,16 @@ RelocalizationResult TreeLocRelocalizer::relocalize(
 
   Pose2 best_transform{};
   std::vector<ReloCorrespondence> best_inliers;
+  // 2.ª melhor hipótese DISTINTA (guarda nº5): se outra transformação diferente
+  // tiver apoio quase igual, o match é ambíguo e não se aceita.
+  std::size_t second_best_size = 0;
+  const auto same_cluster = [this](const Pose2 & a, const Pose2 & b) {
+      const double dt = std::hypot(a.x - b.x, a.y - b.y);
+      double dth = std::abs(a.theta - b.theta);
+      dth = std::min(dth, 2.0 * M_PI - dth);
+      return dt <= params_.distinct_transform_translation_m &&
+             dth <= params_.distinct_transform_rotation_rad;
+    };
 
   std::size_t hypotheses_evaluated = 0;
   constexpr std::size_t kMaxHypotheses = 2000;  // limite de custo (engenharia, não tese)
@@ -245,13 +256,21 @@ RelocalizationResult TreeLocRelocalizer::relocalize(
 
         // Consenso: quantos pontos da query, transformados por esta hipótese,
         // caem perto de ALGUM landmark do mapa com DBH compatível?
+        // UNICIDADE: cada landmark do mapa só pode ser reclamado por UMA
+        // deteção (greedy por ordem da query) — sem isto, duas deteções a
+        // colar no mesmo landmark inflacionavam os inliers e hipóteses
+        // ambíguas passavam o gate.
         std::vector<ReloCorrespondence> inliers;
+        std::set<LandmarkUid> claimed;
         for (std::size_t qi = 0; qi < query.size(); ++qi) {
           const Eigen::Vector2d predicted =
             transform_point(hyp, Eigen::Vector2d(query[qi].x, query[qi].y));
           double best_d = std::numeric_limits<double>::infinity();
           LandmarkUid best_uid = 0;
           for (const auto & m : map) {
+            if (claimed.count(m.uid) > 0) {
+              continue;
+            }
             const double d = (predicted - Eigen::Vector2d(m.x, m.y)).norm();
             if (d < best_d) {
               best_d = d;
@@ -264,12 +283,20 @@ RelocalizationResult TreeLocRelocalizer::relocalize(
             const double diam_residual = std::abs(map_it->diameter - query[qi].diameter);
             if (diam_residual <= params_.diameter_residual_threshold_m) {
               inliers.push_back({qi, best_uid});
+              claimed.insert(best_uid);
             }
           }
         }
         if (inliers.size() > best_inliers.size()) {
+          // A anterior melhor passa a 2.ª melhor SE for de um cluster distinto
+          // (a mesma transformação a melhorar não conta como ambiguidade).
+          if (!best_inliers.empty() && !same_cluster(hyp, best_transform)) {
+            second_best_size = std::max(second_best_size, best_inliers.size());
+          }
           best_inliers = inliers;
           best_transform = hyp;
+        } else if (!inliers.empty() && !same_cluster(hyp, best_transform)) {
+          second_best_size = std::max(second_best_size, inliers.size());
         }
       }
       if (hypotheses_evaluated >= kMaxHypotheses) {
@@ -306,6 +333,16 @@ RelocalizationResult TreeLocRelocalizer::relocalize(
 
   if (result.overlap_ratio < params_.min_overlap_ratio ||
     static_cast<int>(best_inliers.size()) < params_.min_correspondences)
+  {
+    return result;
+  }
+
+  // Guarda nº5: margem clara ao 2.º melhor cluster distinto. Sem margem, o
+  // match é ambíguo (floresta auto-semelhante) → recusar; aceitar errado é
+  // pior do que falhar (o fator errado puxa o grafo e arrasta o terreno).
+  if (second_best_size > 0 &&
+    best_inliers.size() <
+    second_best_size + static_cast<std::size_t>(std::max(0, params_.accept_margin_inliers)))
   {
     return result;
   }

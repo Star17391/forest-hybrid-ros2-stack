@@ -160,7 +160,7 @@ TEST(Tracker, GeometricReassociationReawakensDormantInsteadOfBirthing)
 
   // Constelação assimétrica de 5 troncos (sem simetrias -> match não ambíguo).
   const std::array<std::pair<double, double>, 5> pts = {{
-    {0.0, 0.0}, {6.0, 0.0}, {0.0, 5.0}, {6.0, 5.0}, {3.0, 8.0}}};
+    {0.0, 0.0}, {6.0, 1.0}, {1.0, 5.0}, {7.0, 4.0}, {3.0, 9.0}}};  // irregular: sem simetria de 180° (o retângulo antigo criava um 2.º cluster com 4/5 inliers → a guarda de margem recusava, e bem)
   const std::array<double, 5> diam = {0.30, 0.34, 0.28, 0.33, 0.37};
   const auto td = scores_trunk_dominant();
   auto make_scan = [&](double dx, double dy) {
@@ -171,10 +171,15 @@ TEST(Tracker, GeometricReassociationReawakensDormantInsteadOfBirthing)
       return v;
     };
 
-  // 4 vistas (robot_xy varia) -> promove os 5 a tronco.
-  const std::array<Eigen::Vector2d, 4> views = {
-    Eigen::Vector2d(-3, -3), Eigen::Vector2d(9, -3),
-    Eigen::Vector2d(-3, 8), Eigen::Vector2d(9, 8)};
+  // 8 vistas em órbita -> CONFIRMA os 5 (promovido + paralaxe + score). O mapa
+  // de referência da re-associação usa is_confirmed (fantasmas fora); na
+  // realidade um landmark de referência tem dezenas de observações (mediana
+  // ~134 na corrida real), logo 4 vistas era um fixture sub-observado.
+  std::vector<Eigen::Vector2d> views;
+  for (int s = 0; s < 8; ++s) {
+    const double ang = 2.0 * M_PI * static_cast<double>(s) / 8.0;
+    views.push_back(Eigen::Vector2d(3.0 + 8.0 * std::cos(ang), 3.0 + 8.0 * std::sin(ang)));
+  }
   for (std::size_t s = 0; s < views.size(); ++s) {
     tracker.update(make_scan(0.0, 0.0), 0.1 * static_cast<double>(s), views[s]);
   }
@@ -182,6 +187,7 @@ TEST(Tracker, GeometricReassociationReawakensDormantInsteadOfBirthing)
   std::vector<forest_tree_slam::LandmarkUid> orig_uids;
   for (const auto & t : tracker.tracks()) {
     ASSERT_TRUE(LandmarkTracker::is_promoted(t));
+    ASSERT_TRUE(tracker.is_confirmed(t));
     orig_uids.push_back(t.uid);
   }
 
@@ -225,7 +231,7 @@ TEST(Tracker, GeometricReassociationPrimaryCatchesActiveDriftedLandmark)
   LandmarkTracker tracker(params);
 
   const std::array<std::pair<double, double>, 5> pts = {{
-    {0.0, 0.0}, {6.0, 0.0}, {0.0, 5.0}, {6.0, 5.0}, {3.0, 8.0}}};
+    {0.0, 0.0}, {6.0, 1.0}, {1.0, 5.0}, {7.0, 4.0}, {3.0, 9.0}}};  // irregular: sem simetria de 180° (o retângulo antigo criava um 2.º cluster com 4/5 inliers → a guarda de margem recusava, e bem)
   const std::array<double, 5> diam = {0.30, 0.34, 0.28, 0.33, 0.37};
   const auto td = scores_trunk_dominant();
   auto make_scan = [&](double dx, double dy) {
@@ -236,10 +242,13 @@ TEST(Tracker, GeometricReassociationPrimaryCatchesActiveDriftedLandmark)
       return v;
     };
 
-  // 4 vistas → promove os 5 a tronco. Ficam ATIVOS (sem scans vazios a seguir).
-  const std::array<Eigen::Vector2d, 4> views = {
-    Eigen::Vector2d(-3, -3), Eigen::Vector2d(9, -3),
-    Eigen::Vector2d(-3, 8), Eigen::Vector2d(9, 8)};
+  // 8 vistas em órbita → CONFIRMA os 5 (o mapa da re-associação usa
+  // is_confirmed). Ficam ATIVOS (sem scans vazios a seguir).
+  std::vector<Eigen::Vector2d> views;
+  for (int s = 0; s < 8; ++s) {
+    const double ang = 2.0 * M_PI * static_cast<double>(s) / 8.0;
+    views.push_back(Eigen::Vector2d(3.0 + 8.0 * std::cos(ang), 3.0 + 8.0 * std::sin(ang)));
+  }
   for (std::size_t s = 0; s < views.size(); ++s) {
     tracker.update(make_scan(0.0, 0.0), 0.1 * static_cast<double>(s), views[s]);
   }
@@ -247,6 +256,7 @@ TEST(Tracker, GeometricReassociationPrimaryCatchesActiveDriftedLandmark)
   std::vector<forest_tree_slam::LandmarkUid> orig_uids;
   for (const auto & t : tracker.tracks()) {
     ASSERT_TRUE(LandmarkTracker::is_promoted(t));
+    ASSERT_TRUE(tracker.is_confirmed(t));
     ASSERT_FALSE(t.dormant) << "ainda ativos (não adormeceram)";
     orig_uids.push_back(t.uid);
   }
