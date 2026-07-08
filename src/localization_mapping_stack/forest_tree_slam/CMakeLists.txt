@@ -76,6 +76,10 @@ if(BUILD_TESTING)
   ament_add_gtest(test_mode_manager test/test_mode_manager.cpp)
   target_link_libraries(test_mode_manager tree_slam_core)
 
+  # Tiles fixos: aritmética da grelha + bucketing/rebucket de landmarks.
+  ament_add_gtest(test_tile_map test/test_tile_map.cpp)
+  target_link_libraries(test_tile_map tree_slam_core)
+
   # Testes de diagnóstico da cola do nó (isolam Causa nº1/nº2/tracker).
   ament_add_gtest(test_multiview_dbh test/test_multiview_dbh.cpp)
   target_link_libraries(test_multiview_dbh tree_slam_core)
